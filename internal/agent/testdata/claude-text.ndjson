@@ -1,0 +1,9 @@
+{"type":"system","subtype":"init","cwd":"/home/agent/work","session_id":"8c3389b9-a02c-49e5-94e3-4f7d9912cde9","model":"claude-haiku-5-5"}
+{"type":"stream_event","event":{"type":"message_start"},"session_id":"8c3389b9-a02c-49e5-94e3-4f7d9912cde9"}
+{"type":"stream_event","event":{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}},"session_id":"8c3389b9-a02c-49e5-94e3-4f7d9912cde9"}
+{"type":"stream_event","event":{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"PONG"}},"session_id":"8c3389b9-a02c-49e5-94e3-4f7d9912cde9"}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"PONG"}]},"session_id":"8c3389b9-a02c-49e5-94e3-4f7d9912cde9"}
+{"type":"stream_event","event":{"type":"content_block_stop"},"session_id":"8c3389b9-a02c-49e5-94e3-4f7d9912cde9"}
+{"type":"stream_event","event":{"type":"message_delta"},"session_id":"8c3389b9-a02c-49e5-94e3-4f7d9912cde9"}
+{"type":"stream_event","event":{"type":"message_stop"},"session_id":"8c3389b9-a02c-49e5-94e3-4f7d9912cde9"}
+{"type":"result","subtype":"success","is_error":false,"result":"PONG","session_id":"8c3389b9-a02c-49e5-94e3-4f7d9912cde9","duration_ms":1430,"num_turns":1,"total_cost_usd":0.0025285900000000003}

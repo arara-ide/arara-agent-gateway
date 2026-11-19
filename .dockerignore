@@ -1,0 +1,9 @@
+.git
+.github
+data
+bin
+dist
+.env
+.env.*
+!.env.example
+*.db

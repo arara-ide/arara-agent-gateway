@@ -1,0 +1,42 @@
+name: CI
+on:
+  push:
+    branches: [main, development]
+  pull_request:
+    branches: [main, development]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: gofmt
+        run: test -z "$(gofmt -l .)" || (gofmt -l . && exit 1)
+      - run: go vet ./...
+      - run: go test -race -count=1 ./...
+      - run: CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o dist/arara-agent-gateway ./cmd/gateway
+      - run: sh -n runtime/bin/aag-run && sh -n runtime/bin/aag-kill && sh -n runtime/bin/aag-prune && bash -n scripts/e2e-docker.sh
+  docker:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    needs: test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - run: docker build -t arara-agent-gateway:ci .
+      - run: docker build -f runtime/Dockerfile -t arara-agent-runtime:local .
+      - name: Docker end-to-end test (no AI credentials)
+        env:
+          E2E_SKIP_PROVIDERS: "1"
+        run: ./scripts/e2e-docker.sh

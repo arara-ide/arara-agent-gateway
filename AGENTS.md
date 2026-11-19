@@ -71,14 +71,16 @@ internal/secret/      cifra autenticada de credenciais
 internal/docker/      cliente mínimo da API do Docker Engine
 internal/instance/    ciclo de vida das instâncias e travas por instância
 internal/agent/       adapters dos CLIs (argumentos, parser de eventos, login)
+internal/connect/     credenciais dos agentes (chave de API cifrada, status, login sem terminal)
 internal/run/         execuções, limites, cancelamento, streaming e histórico
 internal/idle/        desligamento por inatividade
 internal/github/      OAuth, repositórios, operações Git
 internal/api/         rotas, autenticação, erros, SSE
 web/                  dashboard estática embutida
-runtime/              Dockerfile da imagem compartilhada dos agentes
+runtime/              Dockerfile da imagem compartilhada e scripts aag-run, aag-kill, aag-prune
 docs/                 OpenAPI, integração AC-WEB, decisões
 scripts/              testes reais com Docker
+assets.go             embute web/ e docs/openapi.yaml no binário
 ```
 
 ## 9. API
@@ -105,7 +107,8 @@ scripts/              testes reais com Docker
 
 - Toda mudança de comportamento traz teste unitário na mesma entrega. Sem rede, sem conta real, sem créditos de IA: use os dublês de `internal/docker` e as fixtures dos adapters.
 - Comandos: `gofmt -l .` vazio, `go vet ./...`, `go test -race ./...`, `go build ./cmd/gateway`.
-- Efeito real (Docker, containers, login, inatividade): `scripts/e2e-docker.sh`, com diretório temporário, porta e nomes isolados. Execução real com IA só na máquina do mantenedor, com modelos econômicos.
+- Efeito real (Docker, containers, login, inatividade): `scripts/e2e-docker.sh`, com diretório temporário, porta e nomes isolados. No CI roda com `E2E_SKIP_PROVIDERS=1` (sem chamadas a provedores). Execução real com IA só na máquina do mantenedor, com modelos econômicos.
+- Mudou o wrapper `runtime/bin/*`: reconstrua a imagem e rode o e2e completo, porque os dublês removem o wrapper.
 - Proibido apagar, pular ou afrouxar teste.
 
 ## 13. Critérios de aceite de uma entrega

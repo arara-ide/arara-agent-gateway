@@ -1,0 +1,138 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>Arara Agent Gateway</title>
+  <link rel="stylesheet" href="app.css">
+  <script type="module" src="app.js"></script>
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="#/" data-i18n="app.title">Arara Agent Gateway</a>
+    <button type="button" id="lock" class="ghost" hidden data-i18n="auth.lock">Lock</button>
+  </header>
+
+  <main id="main">
+    <section id="auth-view" class="card narrow" aria-labelledby="auth-title">
+      <h1 id="auth-title" data-i18n="auth.title">Administrator access</h1>
+      <p class="muted" data-i18n="auth.hint">The key stays in memory only and is cleared when the page is closed.</p>
+      <form id="auth-form" class="stack">
+        <label for="api-key" data-i18n="auth.key">API key</label>
+        <input id="api-key" name="apikey" type="password" autocomplete="off" required spellcheck="false">
+        <p id="auth-error" class="error" role="alert" hidden></p>
+        <button type="submit" class="primary" data-i18n="auth.submit">Unlock</button>
+      </form>
+    </section>
+
+    <section id="list-view" hidden aria-labelledby="list-title">
+      <div class="row between">
+        <h1 id="list-title" data-i18n="list.title">Instances</h1>
+        <button type="button" id="refresh" class="ghost" data-i18n="action.refresh">Refresh</button>
+      </div>
+      <form id="create-form" class="row wrap card">
+        <label for="new-user" data-i18n="list.newUser">AC-WEB user ID</label>
+        <input id="new-user" name="user" required pattern="[A-Za-z0-9._:@\-]{1,128}" spellcheck="false">
+        <label for="new-name" data-i18n="list.newName">Name (optional)</label>
+        <input id="new-name" name="name" maxlength="80">
+        <button type="submit" class="primary" data-i18n="list.create">Create instance</button>
+      </form>
+      <p id="list-status" class="muted" role="status"></p>
+      <div tabindex="0" role="region" aria-labelledby="list-caption" class="table-wrapper">
+        <table>
+          <caption id="list-caption" class="visually-hidden" data-i18n="list.title">Instances</caption>
+          <thead>
+            <tr>
+              <th scope="col" data-i18n="col.instance">Instance</th>
+              <th scope="col" data-i18n="col.user">User</th>
+              <th scope="col" data-i18n="col.state">Status</th>
+              <th scope="col" data-i18n="col.created">Created</th>
+              <th scope="col" data-i18n="col.activity">Last activity</th>
+              <th scope="col" data-i18n="col.running">Running agents</th>
+              <th scope="col" data-i18n="col.actions">Actions</th>
+            </tr>
+          </thead>
+          <tbody id="instances"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section id="detail-view" hidden aria-labelledby="detail-title">
+      <div class="row between wrap">
+        <div>
+          <a href="#/" class="back" data-i18n="action.back">Back to instances</a>
+          <h1 id="detail-title"></h1>
+        </div>
+        <div class="row">
+          <button type="button" id="detail-start" class="primary" data-i18n="action.start">Start</button>
+          <button type="button" id="detail-stop" data-i18n="action.stop">Stop</button>
+          <button type="button" id="detail-refresh" class="ghost" data-i18n="action.refresh">Refresh</button>
+        </div>
+      </div>
+      <p id="detail-status" class="muted" role="status"></p>
+
+      <div class="grid">
+        <section class="card" aria-labelledby="info-title">
+          <h2 id="info-title" data-i18n="detail.info">Instance</h2>
+          <dl id="info" class="facts"></dl>
+        </section>
+        <section class="card" aria-labelledby="conn-title">
+          <h2 id="conn-title" data-i18n="detail.connections">Connections</h2>
+          <ul id="connections" class="plain"></ul>
+        </section>
+      </div>
+
+      <section class="card" aria-labelledby="chat-title">
+        <h2 id="chat-title" data-i18n="chat.title">Test chat</h2>
+        <form id="chat-form" class="stack">
+          <fieldset class="row wrap">
+            <legend data-i18n="chat.agent">Agent</legend>
+            <label><input type="radio" name="agent" value="claude" checked> Claude Code</label>
+            <label><input type="radio" name="agent" value="codex"> Codex</label>
+            <label><input type="radio" name="agent" value="antigravity"> Google Antigravity</label>
+          </fieldset>
+          <label for="prompt" data-i18n="chat.prompt">Prompt</label>
+          <textarea id="prompt" name="prompt" rows="3" required maxlength="100000"></textarea>
+          <div class="row wrap">
+            <label><input type="checkbox" name="resume" id="resume"> <span data-i18n="chat.resume">Continue last session of this agent</span></label>
+            <label for="model" data-i18n="chat.model">Model (optional)</label>
+            <input id="model" name="model" maxlength="80" spellcheck="false">
+            <button type="submit" class="primary" data-i18n="chat.send">Send</button>
+          </div>
+        </form>
+        <div id="runs" class="runs" aria-live="polite"></div>
+      </section>
+
+      <section class="card" aria-labelledby="history-title">
+        <h2 id="history-title" data-i18n="history.title">History</h2>
+        <p class="muted" data-i18n="history.hint">The last 20 runs of this instance.</p>
+        <ol id="history" class="plain history"></ol>
+      </section>
+    </section>
+  </main>
+
+  <dialog id="confirm" aria-labelledby="confirm-title" closedby="any">
+    <h2 id="confirm-title"></h2>
+    <p id="confirm-body"></p>
+    <form method="dialog" class="row end">
+      <button value="cancel" autofocus data-i18n="action.cancel">Cancel</button>
+      <button value="ok" class="danger" id="confirm-ok"></button>
+    </form>
+  </dialog>
+
+  <template id="run-template">
+    <article class="run">
+      <header class="row between">
+        <strong class="run-agent"></strong>
+        <span class="badge run-status"></span>
+        <button type="button" class="ghost run-cancel" data-i18n="action.cancelRun">Cancel run</button>
+      </header>
+      <p class="run-prompt muted"></p>
+      <pre class="run-output"></pre>
+      <ul class="run-tools plain muted"></ul>
+      <p class="run-error error" hidden></p>
+    </article>
+  </template>
+</body>
+</html>
