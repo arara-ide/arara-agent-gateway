@@ -18,7 +18,6 @@ type Config struct {
 	DataDir              string
 	LogLevel             string
 	APIKey               string
-	IntegrationAPIKey    string
 	EncryptionKey        []byte
 	GitHubClientID       string
 	GitHubClientSecret   string
@@ -84,7 +83,6 @@ func Load(getenv Getenv) (Config, error) {
 		DataDir:              str("DATA_DIR", "./data"),
 		LogLevel:             strings.ToLower(str("LOG_LEVEL", "info")),
 		APIKey:               str("API_KEY", ""),
-		IntegrationAPIKey:    str("INTEGRATION_API_KEY", ""),
 		GitHubClientID:       str("GITHUB_CLIENT_ID", ""),
 		GitHubClientSecret:   str("GITHUB_CLIENT_SECRET", ""),
 		GitHubRedirectURL:    str("GITHUB_REDIRECT_URL", ""),
@@ -111,14 +109,6 @@ func Load(getenv Getenv) (Config, error) {
 
 	if len(cfg.APIKey) < minAPIKeyLength || cfg.APIKey == "change_me" {
 		errs = append(errs, fmt.Errorf("API_KEY is required and must have at least %d characters", minAPIKeyLength))
-	}
-	if cfg.IntegrationAPIKey != "" {
-		if len(cfg.IntegrationAPIKey) < minAPIKeyLength {
-			errs = append(errs, fmt.Errorf("INTEGRATION_API_KEY must have at least %d characters", minAPIKeyLength))
-		}
-		if cfg.IntegrationAPIKey == cfg.APIKey {
-			errs = append(errs, errors.New("INTEGRATION_API_KEY must differ from API_KEY"))
-		}
 	}
 
 	key, err := ParseKey(str("CREDENTIALS_ENCRYPTION_KEY", ""))

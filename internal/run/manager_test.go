@@ -51,6 +51,13 @@ func (f *fakeCLIs) handler(e *fakedocker.Exec) int {
 		}
 		fmt.Fprintln(e.Stdout, "Not logged in")
 		return 1
+	case cmd[0] == "agy" && len(cmd) > 1 && cmd[len(cmd)-1] == "models":
+		if logged {
+			fmt.Fprintln(e.Stdout, `{"conversation_id":"","status":"SUCCESS","response":"gemini-4-neon-high\tGemini 4 Neon"}`)
+			return 0
+		}
+		fmt.Fprintln(e.Stderr, "Error: Please sign in")
+		return 1
 	}
 	if f.started != nil {
 		f.started <- e.ProcID
@@ -164,7 +171,7 @@ func TestParallelAgentsAndLimits(t *testing.T) {
 	f := newFixture(t, 3)
 	in := f.env.Running(t, "user-1")
 	f.login(in)
-	if _, err := f.conn.SetAPIKey(context.Background(), in.UserID, "antigravity", "AIzaTestKey123456"); err != nil {
+	if _, err := f.conn.SetAPIKey(context.Background(), in.ID, "antigravity", "AIzaTestKey123456"); err != nil {
 		t.Fatal(err)
 	}
 	f.clis.block = true
@@ -231,8 +238,8 @@ func TestNotAuthenticatedIsRejectedBeforeRun(t *testing.T) {
 
 func TestAuthFailureDuringRunMarksConnection(t *testing.T) {
 	f := newFixture(t, 3)
-	in := f.env.Running(t, "user-1")
-	if _, err := f.conn.SetAPIKey(context.Background(), in.UserID, "claude", "sk-ant-invalid-key"); err != nil {
+	in := f.env.Running(t, "one")
+	if _, err := f.conn.SetAPIKey(context.Background(), in.ID, "claude", "sk-ant-invalid-key"); err != nil {
 		t.Fatal(err)
 	}
 	r, err := f.runs.Start(context.Background(), in, "claude", run.Request{Prompt: "x"})
@@ -243,21 +250,21 @@ func TestAuthFailureDuringRunMarksConnection(t *testing.T) {
 	if final.Status != store.RunFailed || final.ErrorCode != "agent_not_authenticated" {
 		t.Fatalf("final %+v", final)
 	}
-	c := f.conn.Connection(context.Background(), in.UserID, "claude")
+	c := f.conn.Connection(context.Background(), in.ID, "claude")
 	if c.Status != store.ConnError || c.Method != "api_key" {
 		t.Fatalf("connection %s %s", c.Status, c.Method)
 	}
 }
 
-func TestCredentialsAreIsolatedPerUser(t *testing.T) {
+func TestCredentialsAreIsolatedPerInstance(t *testing.T) {
 	f := newFixture(t, 3)
-	a := f.env.Running(t, "user-a")
-	b := f.env.Running(t, "user-b")
+	a := f.env.Running(t, "inst-a")
+	b := f.env.Running(t, "inst-b")
 	ctx := context.Background()
-	if _, err := f.conn.SetAPIKey(ctx, "user-a", "antigravity", "AIza-user-a-secret"); err != nil {
+	if _, err := f.conn.SetAPIKey(ctx, a.ID, "antigravity", "AIza-inst-a-secret"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := f.conn.SetAPIKey(ctx, "user-b", "antigravity", "AIza-user-b-secret"); err != nil {
+	if _, err := f.conn.SetAPIKey(ctx, b.ID, "antigravity", "AIza-inst-b-secret"); err != nil {
 		t.Fatal(err)
 	}
 	ra, _ := f.runs.Start(ctx, a, "antigravity", run.Request{Prompt: "x"})
@@ -267,17 +274,17 @@ func TestCredentialsAreIsolatedPerUser(t *testing.T) {
 	f.clis.mu.Lock()
 	envA, envB := strings.Join(f.clis.envs[ra.ID], ","), strings.Join(f.clis.envs[rb.ID], ",")
 	f.clis.mu.Unlock()
-	if !strings.Contains(envA, "user-a-secret") || strings.Contains(envA, "user-b") || !strings.Contains(envB, "user-b-secret") || strings.Contains(envB, "user-a") {
+	if !strings.Contains(envA, "inst-a-secret") || strings.Contains(envA, "inst-b") || !strings.Contains(envB, "inst-b-secret") || strings.Contains(envB, "inst-a") {
 		t.Fatalf("credential leak: A=%s B=%s", envA, envB)
 	}
 	for _, e := range f.env.Engine.ExecLog() {
-		if e.Container == "aag-"+a.ID && strings.Contains(strings.Join(e.Env, ","), "user-b") {
-			t.Fatal("user-b secret reached user-a container")
+		if e.Container == "aag-"+a.ID && strings.Contains(strings.Join(e.Env, ","), "inst-b") {
+			t.Fatal("inst-b secret reached inst-a container")
 		}
 	}
-	conns, _ := f.env.Store.ListConnections(ctx, "user-a")
+	conns, _ := f.env.Store.ListConnections(ctx, a.ID)
 	for _, c := range conns {
-		if strings.Contains(c.Secret, "user-a-secret") {
+		if strings.Contains(c.Secret, "inst-a-secret") {
 			t.Fatal("api key stored in plaintext")
 		}
 	}
@@ -311,7 +318,7 @@ func TestValidation(t *testing.T) {
 
 func TestRunOnStoppedInstance(t *testing.T) {
 	f := newFixture(t, 3)
-	in, _, _ := f.env.Instances.Create(context.Background(), "user-1", "")
+	in, _ := f.env.Instances.Create(context.Background(), "one")
 	if _, err := f.runs.Start(context.Background(), in, "claude", run.Request{Prompt: "x"}); err == nil {
 		t.Fatal("run started on stopped instance")
 	}

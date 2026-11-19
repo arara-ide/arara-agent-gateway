@@ -9,7 +9,6 @@ import (
 	"io/fs"
 	"log/slog"
 	"net/http"
-	"regexp"
 	"strings"
 	"time"
 
@@ -23,38 +22,26 @@ import (
 
 const maxBodyBytes = 1 << 20
 
-var userIDPattern = regexp.MustCompile(`^[A-Za-z0-9._:@-]{1,128}$`)
-
 type Deps struct {
-	Store             *store.Store
-	Engine            docker.Engine
-	Instances         *instance.Manager
-	Runs              *run.Manager
-	Connections       *connect.Service
-	GitHub            *github.Service
-	Workspace         *github.Workspace
-	APIKey            string
-	IntegrationAPIKey string
-	IdleTimeout       time.Duration
-	AutoStart         bool
-	Web               fs.FS
-	OpenAPI           []byte
-	Log               *slog.Logger
-	Version           string
+	Store       *store.Store
+	Engine      docker.Engine
+	Instances   *instance.Manager
+	Runs        *run.Manager
+	Connections *connect.Service
+	GitHub      *github.Service
+	Workspace   *github.Workspace
+	APIKey      string
+	IdleTimeout time.Duration
+	AutoStart   bool
+	Web         fs.FS
+	OpenAPI     []byte
+	Log         *slog.Logger
+	Version     string
 }
 
 type Server struct {
 	Deps
 	mux *http.ServeMux
-}
-
-type ctxKey int
-
-const scopeKey ctxKey = 1
-
-type scope struct {
-	userID string
-	admin  bool
 }
 
 func New(d Deps) *Server {
@@ -102,26 +89,10 @@ func (s *Server) auth(h handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-store")
 		key := r.Header.Get("apikey")
-		sc := scope{}
-		switch {
-		case key != "" && equal(key, s.APIKey):
-			sc.admin = true
-		case key != "" && s.IntegrationAPIKey != "" && equal(key, s.IntegrationAPIKey):
-		default:
+		if key == "" || !equal(key, s.APIKey) {
 			writeError(w, errUnauthorized)
 			return
 		}
-		if uid := r.Header.Get("X-User-Id"); uid != "" {
-			if !userIDPattern.MatchString(uid) {
-				writeError(w, errInvalidUser)
-				return
-			}
-			sc.userID = uid
-		} else if !sc.admin {
-			writeError(w, errUserRequired)
-			return
-		}
-		r = r.WithContext(context.WithValue(r.Context(), scopeKey, sc))
 		r.Body = http.MaxBytesReader(w, r.Body, maxBodyBytes)
 		if err := h(w, r); err != nil {
 			ae := toAPIError(err)
@@ -137,31 +108,8 @@ func equal(a, b string) bool {
 	return subtle.ConstantTimeCompare([]byte(a), []byte(b)) == 1
 }
 
-func scopeOf(r *http.Request) scope {
-	sc, _ := r.Context().Value(scopeKey).(scope)
-	return sc
-}
-
-func (s *Server) userParam(r *http.Request) (string, error) {
-	uid := r.PathValue("userId")
-	if !userIDPattern.MatchString(uid) {
-		return "", errInvalidUser
-	}
-	if sc := scopeOf(r); sc.userID != "" && sc.userID != uid {
-		return "", errNotFound
-	}
-	return uid, nil
-}
-
 func (s *Server) instanceParam(r *http.Request) (store.Instance, error) {
-	in, err := s.Store.GetInstance(r.Context(), r.PathValue("id"))
-	if err != nil {
-		return store.Instance{}, err
-	}
-	if sc := scopeOf(r); sc.userID != "" && sc.userID != in.UserID {
-		return store.Instance{}, errNotFound
-	}
-	return in, nil
+	return s.Store.GetInstance(r.Context(), r.PathValue("id"))
 }
 
 func decode(r *http.Request, v any) error {
@@ -209,8 +157,11 @@ func (s *Server) routes() {
 	s.handle("POST /api/instances/{id}/stop", s.stopInstance)
 	s.handle("GET /api/instances/{id}/status", s.instanceStatus)
 	s.handle("GET /api/instances/{id}/history", s.history)
+	s.handle("GET /api/instances/{id}/connections", s.instanceConnections)
 
 	s.handle("GET /api/instances/{id}/agents", s.instanceAgents)
+	s.handle("PUT /api/instances/{id}/agents/{agent}/api-key", s.setAPIKey)
+	s.handle("DELETE /api/instances/{id}/agents/{agent}/api-key", s.removeAPIKey)
 	s.handle("POST /api/instances/{id}/agents/{agent}/run", s.startRun)
 	s.handle("POST /api/instances/{id}/agents/{agent}/login", s.startLogin)
 	s.handle("GET /api/instances/{id}/agents/{agent}/login", s.getLogin)
@@ -222,19 +173,15 @@ func (s *Server) routes() {
 	s.handle("GET /api/instances/{id}/runs/{runId}/stream", s.streamRun)
 	s.handle("POST /api/instances/{id}/runs/{runId}/cancel", s.cancelRun)
 
+	s.handle("POST /api/instances/{id}/github/connect", s.githubConnect)
+	s.handle("POST /api/instances/{id}/github/callback", s.githubCallback)
+	s.handle("GET /api/instances/{id}/github", s.githubStatus)
+	s.handle("GET /api/instances/{id}/github/repos", s.githubRepos)
+	s.handle("DELETE /api/instances/{id}/github", s.githubDisconnect)
+
 	s.handle("GET /api/instances/{id}/repos", s.listLocalRepos)
 	s.handle("POST /api/instances/{id}/repos", s.syncRepo)
 	s.handle("POST /api/instances/{id}/repos/{owner}/{name}/push", s.pushRepo)
-
-	s.handle("GET /api/users/{userId}/instance", s.userInstance)
-	s.handle("GET /api/users/{userId}/connections", s.userConnections)
-	s.handle("PUT /api/users/{userId}/agents/{agent}/api-key", s.setAPIKey)
-	s.handle("DELETE /api/users/{userId}/agents/{agent}/api-key", s.removeAPIKey)
-	s.handle("POST /api/users/{userId}/github/connect", s.githubConnect)
-	s.handle("POST /api/users/{userId}/github/callback", s.githubCallback)
-	s.handle("GET /api/users/{userId}/github", s.githubStatus)
-	s.handle("GET /api/users/{userId}/github/repos", s.githubRepos)
-	s.handle("DELETE /api/users/{userId}/github", s.githubDisconnect)
 
 	s.mux.Handle("/", s.fallback())
 }

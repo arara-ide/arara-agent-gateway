@@ -1,42 +1,37 @@
 # Contrato de integração com o AC-WEB
 
-Este documento descreve como o AC-WEB PWA e o AC-WEB Desktop usam o Arara Agent Gateway. Os dois usam o mesmo contrato, sempre por meio do backend do AC-WEB. A referência formal de cada rota está em [`openapi.yaml`](openapi.yaml), também servida em `GET /api/openapi.yaml`.
+Este documento descreve como o AC-WEB PWA e o AC-WEB Desktop usam o Arara Agent Gateway. Os dois usam o mesmo contrato, sempre por meio do backend do AC-WEB (`ac-services`). A referência formal de cada rota está em [`openapi.yaml`](openapi.yaml), também servida em `GET /api/openapi.yaml`.
 
 ## 1. Quem fala com quem
 
 ```text
-PWA / Desktop ──(sessão do AC-WEB)──> backend AC-WEB ──(HTTPS + apikey + X-User-Id)──> Gateway
+PWA / Desktop ──(sessão do AC-WEB)──> backend AC-WEB (ac-services) ──(HTTPS + apikey)──> Gateway
 ```
 
-- O navegador e o app Desktop **nunca** chamam o gateway direto e **nunca** recebem `API_KEY` nem `INTEGRATION_API_KEY`.
-- O backend do AC-WEB autentica o usuário final como já faz hoje, pega o ID dele da própria sessão e chama o gateway com esse ID.
-- Nada do que o cliente envia em corpo, query ou cabeçalho pode virar `X-User-Id`. O ID sempre vem da sessão validada no servidor.
+- O navegador e o app Desktop **nunca** chamam o gateway direto e **nunca** recebem a `API_KEY`.
+- O gateway segue o modelo da Evolution API: uma única chave global (`apikey`) com acesso a todas as instâncias.
+- O `ac-services` é quem autentica o usuário final, guarda o mapeamento `userId ↔ instanceId` (um ou mais, conforme a regra de negócio do produto) e verifica se o usuário da sessão é dono da instância antes de repassar qualquer chamada ao gateway.
 
 ## 2. Autenticação
 
 | Cabeçalho | Valor |
 |---|---|
-| `apikey` | `INTEGRATION_API_KEY` (recomendado) ou `API_KEY` |
-| `X-User-Id` | ID estável do usuário no AC-WEB, `^[A-Za-z0-9._:@-]{1,128}$` |
+| `apikey` | `API_KEY` configurada no gateway |
 
-- Com a `INTEGRATION_API_KEY`, o `X-User-Id` é obrigatório (`400 user_scope_required`) e toda operação fica restrita aos recursos desse usuário.
-- Instância, execução ou stream de outro usuário respondem `404 not_found`. O gateway não diz se o recurso existe.
-- Rotas `/api/users/{userId}/...` exigem `userId` igual ao `X-User-Id`. Se forem diferentes, a resposta é `404`.
-- A `API_KEY` administrativa é da dashboard e da operação. Ela não deve ficar no backend do AC-WEB, a menos que seja a única chave configurada.
-- Em produção, publique o gateway só em HTTPS (proxy reverso) ou em rede privada entre os servidores.
+- Toda rota sob `/api/*` (exceto `/api/health` e `/api/openapi.yaml`) exige `apikey` válida (`401 unauthorized` quando ausente ou inválida).
+- Em produção, publique o gateway só em HTTPS (proxy reverso) ou na rede privada `microservices_network` entre o `ac-services` e o gateway.
 
-Exemplo de cliente no backend (TypeScript, NestJS ou qualquer Node):
+Exemplo de cliente no backend (TypeScript/NestJS):
 
 ```ts
 const GATEWAY_URL = process.env.AGENT_GATEWAY_URL!;
 const GATEWAY_KEY = process.env.AGENT_GATEWAY_KEY!;
 
-async function gateway(userId: string, method: string, path: string, body?: unknown) {
+async function gateway(method: string, path: string, body?: unknown) {
   const res = await fetch(`${GATEWAY_URL}/api${path}`, {
     method,
     headers: {
       apikey: GATEWAY_KEY,
-      'X-User-Id': userId,
       ...(body === undefined ? {} : { 'Content-Type': 'application/json' }),
     },
     body: body === undefined ? undefined : JSON.stringify(body),
@@ -48,17 +43,17 @@ async function gateway(userId: string, method: string, path: string, body?: unkn
 }
 ```
 
-## 3. Associação usuário ↔ instância
+## 3. Organização de instâncias no `ac-services`
 
-- Cada usuário tem uma instância principal. `POST /api/instances` é idempotente: devolve `201` com `created: true` na primeira vez e `200` com a mesma instância depois.
-- O backend não precisa guardar o `instance_id`. Use `GET /api/users/{userId}/instance` para descobrir a instância do usuário da sessão.
-- Se guardar o `instance_id`, o gateway confere o dono em toda chamada com `X-User-Id`. Conhecer o ID de outra instância não dá acesso a ela.
+- O gateway não impõe limite de 1 instância por usuário nem conhece usuários finais.
+- `POST /api/instances` com `{ "name": "opcional" }` (ou `{}`) sempre cria uma nova instância e devolve `201 Created` com `{ "instance": { "id": "inst_…", ... } }`.
+- O `ac-services` salva o `instance.id` associado ao usuário no MongoDB e valida a propriedade em todas as rotas expostas ao cliente.
 
 Fluxo recomendado ao abrir o módulo de agentes:
 
-1. `POST /api/instances` com `{}` (cria ou devolve a instância do usuário).
-2. `GET /api/instances/{id}/status` para mostrar o estado da instância, dos três agentes e do GitHub.
-3. Se `instance.state` for `stopped`, mostre o botão "Ligar", que chama `POST /api/instances/{id}/start`.
+1. O `ac-services` busca a instância do usuário no próprio banco; se ainda não existir, chama `POST /api/instances` e salva o `instance.id`.
+2. Chama `GET /api/instances/{id}/status` para mostrar o estado da instância, dos três agentes e do GitHub.
+3. Se `instance.state` for `stopped`, mostra o botão "Ligar", que chama `POST /api/instances/{id}/start`.
 
 ## 4. Estados
 
@@ -78,32 +73,32 @@ Outros campos úteis: `last_activity_at`, `idle_stop_at` (quando a instância va
 
 | `status` | Significado |
 |---|---|
-| `connected` | Pronto para uso. `account` mostra e-mail, login GitHub ou a chave mascarada (`AIza…0000`). |
-| `disconnected` | O usuário desconectou. |
+| `connected` | Pronto para uso. `account` mostra e-mail, login GitHub, `Google` ou a chave mascarada (`AIza…0000`). |
+| `disconnected` | Desconectado. |
 | `expired` | Login de conta que deixou de valer (token revogado ou vencido). Peça novo login. |
 | `error` | Chave de API recusada pelo provedor. Peça uma chave nova. |
 | `setup_required` | Nunca configurado. |
 
 `method` vale `account` (login oficial do CLI), `api_key` (chave do próprio usuário) ou `oauth` (GitHub).
 
-## 5. Conexão dos agentes
+## 5. Conexão dos agentes (por instância)
 
 | Agente | `account` | `api_key` | Observação |
 |---|---|---|---|
 | `claude` | Sim: `claude auth login`. A pessoa abre a URL e cola o código. | `ANTHROPIC_API_KEY` | A conta fica nos arquivos do CLI dentro do volume da instância. |
 | `codex` | Sim: `codex login --device-auth`. A pessoa abre a URL e digita o código. | `CODEX_API_KEY` | O login por código de dispositivo precisa estar habilitado na conta ChatGPT. |
-| `antigravity` | Não | `GEMINI_API_KEY` com `modelProvider: gemini` | O login Google do Antigravity exige keyring local, e os termos proíbem acesso por ferramentas de terceiros. |
+| `antigravity` | Sim: `agy` (Google OAuth). A pessoa abre a URL e cola o código. | `GEMINI_API_KEY` com `modelProvider: gemini` | Sem keyring no container, o CLI usa armazenamento em arquivo dentro do volume. |
 
 ### Chave de API (vale para os três)
 
 ```http
-PUT /api/users/{userId}/agents/{agent}/api-key
+PUT /api/instances/{id}/agents/{agent}/api-key
 { "api_key": "..." }
 ```
 
-A chave fica cifrada no gateway e só entra como variável de ambiente durante cada execução. Ela nunca é devolvida. Para remover, use `DELETE` na mesma rota.
+A chave fica cifrada no gateway (vinculada ao `instance_id`) e só entra como variável de ambiente durante cada execução. Ela nunca é devolvida. Para remover, use `DELETE` na mesma rota.
 
-### Login de conta (Claude Code e Codex)
+### Login de conta (Claude Code, Codex e Google Antigravity)
 
 A instância precisa estar ligada.
 
@@ -112,35 +107,35 @@ A instância precisa estar ligada.
    { "id": "login_…", "status": "waiting_for_user", "url": "https://…", "code": "ABCD-12345", "needs_input": false, "expires_at": "…" }
    ```
 2. Mostre `url` como link para o usuário abrir no navegador dele. Se houver `code`, mostre-o (Codex).
-3. Se `needs_input` for `true` (Claude), mostre um campo para o código exibido depois do login e envie com `POST …/login/input` `{ "code": "…" }`. O campo aceita uma linha só, sem espaços. Nada além disso chega ao terminal.
+3. Se `needs_input` for `true` (Claude Code e Google Antigravity), mostre um campo para o código exibido depois do login e envie com `POST …/login/input` `{ "code": "…" }`. O campo aceita uma linha só, sem espaços. Nada além disso chega ao terminal.
 4. Consulte `GET …/login` a cada 3 segundos até `status` virar `succeeded`, `failed` ou `cancelled`. Em `failed`, `error` vale `login_timeout`, `login_failed` ou `not_authenticated`.
 5. Para cancelar, use `DELETE …/login`. Para sair da conta, use `POST …/logout`.
 
 A sessão de login dura até 10 minutos e mantém a instância ligada enquanto estiver aberta.
 
-## 6. GitHub
+## 6. GitHub (por instância)
 
-O GitHub funciona por usuário, com GitHub App (recomendado, token de usuário com validade curta e refresh) ou com OAuth App. O gateway usa `state` de uso único (10 minutos), vinculado ao usuário, e PKCE S256.
+O GitHub funciona por instância, com GitHub App (recomendado, token de usuário com validade curta e refresh) ou com OAuth App. O gateway usa `state` de uso único (10 minutos), vinculado à instância, e PKCE S256.
 
-`GITHUB_REDIRECT_URL` aponta para uma página **do AC-WEB**, não do gateway. Assim, a conclusão acontece dentro da sessão autenticada do usuário, e um link de autorização criado por outra pessoa não consegue vincular a conta errada.
+`GITHUB_REDIRECT_URL` aponta para uma página **do AC-WEB**, não do gateway. Assim, a conclusão acontece dentro da sessão autenticada do usuário, e o `ac-services` encaminha `code` e `state` para a instância correta daquele usuário.
 
 1. Usuário clica em "Conectar GitHub" no PWA/Desktop.
-2. O backend chama `POST /api/users/{userId}/github/connect`, recebe `authorize_url` e redireciona o navegador para lá.
+2. O backend chama `POST /api/instances/{id}/github/connect`, recebe `authorize_url` e redireciona o navegador para lá.
 3. O GitHub redireciona para `GITHUB_REDIRECT_URL?code=…&state=…` no AC-WEB.
-4. O backend do AC-WEB pega `code` e `state` da query e o usuário da sessão, e chama `POST /api/users/{userId}/github/callback` com `{ "code": "…", "state": "…" }`.
-5. A resposta traz `connection.status = connected` e `account` (login GitHub). `400 github_invalid_state` indica link expirado, já usado ou de outro usuário.
+4. O backend do AC-WEB valida o usuário da sessão, recupera a instância dele e chama `POST /api/instances/{id}/github/callback` com `{ "code": "…", "state": "…" }`.
+5. A resposta traz `connection.status = connected` e `account` (login GitHub). `400 github_invalid_state` indica link expirado, já usado ou de outra instância.
 
 Outras operações:
 
 | Ação | Rota |
 |---|---|
-| Estado (valida o token no GitHub) | `GET /api/users/{userId}/github` |
-| Listar repositórios acessíveis | `GET /api/users/{userId}/github/repos?page=1` |
+| Estado (valida o token no GitHub) | `GET /api/instances/{id}/github` |
+| Listar repositórios acessíveis | `GET /api/instances/{id}/github/repos?page=1` |
 | Clonar ou atualizar na instância | `POST /api/instances/{id}/repos` `{ "full_name": "owner/name", "select": true }` |
 | Repositórios clonados | `GET /api/instances/{id}/repos` |
 | Escolher o repositório padrão | `PATCH /api/instances/{id}` `{ "selected_repo": "owner/name" }` |
 | Enviar o trabalho de um agente | `POST /api/instances/{id}/repos/{owner}/{name}/push` `{ "agent": "codex" }` |
-| Desconectar (revoga no GitHub) | `DELETE /api/users/{userId}/github` |
+| Desconectar (revoga no GitHub) | `DELETE /api/instances/{id}/github` |
 
 - Cada agente trabalha num worktree próprio, na branch `arara/<agente>`. O push só aceita branches `arara/*` e nunca envia para a branch padrão.
 - O token GitHub não fica no volume. O gateway o injeta como cabeçalho temporário em cada `clone`, `fetch` e `push`. Os agentes fazem commits locais e o push passa sempre pelo gateway.
@@ -162,7 +157,7 @@ POST /api/instances/{id}/agents/{agent}/run
 
 ### Stream (SSE)
 
-`GET /api/instances/{id}/runs/{runId}/stream`, com os mesmos cabeçalhos `apikey` e `X-User-Id`.
+`GET /api/instances/{id}/runs/{runId}/stream`, com o cabeçalho `apikey`.
 
 | Evento | `data` |
 |---|---|
@@ -200,7 +195,7 @@ Cancelar: `POST /api/instances/{id}/runs/{runId}/cancel`. O evento `done` chega 
 - Contam como atividade: `start`, execuções, logins, logout e operações de repositório. Leituras (`status`, `history`, listas) não mantêm a instância ligada, então o PWA pode consultar o estado sem impedir o desligamento.
 - A instância desliga sozinha depois de `IDLE_TIMEOUT_SECONDS` sem atividade (padrão: 5 minutos). Execuções e logins em andamento nunca são interrompidos. A contagem recomeça quando terminam.
 - Desligar não desconecta contas: logins dos CLIs, chaves, GitHub, repositórios e histórico continuam.
-- `DELETE /api/instances/{id}?confirm={id}` apaga container, volume (logins de conta, repositórios e sessões) e histórico. As chaves de API e o GitHub continuam na conta do usuário. Peça confirmação explícita na interface.
+- `DELETE /api/instances/{id}?confirm={id}` apaga container, volume (logins de conta, repositórios e sessões), conexões (chaves e GitHub) e histórico. Peça confirmação explícita na interface.
 
 ## 10. Erros
 
@@ -212,14 +207,14 @@ Formato único:
 
 - `code` é estável. Traduza no cliente (PT, EN e ES) e use texto genérico para códigos desconhecidos.
 - `message` é técnico e em inglês. Não o mostre ao usuário final.
-- Status usados: `400` validação, `401` chave, `403` acesso negado pelo GitHub ou usuário divergente, `404` não encontrado ou de outro usuário, `409` estado incompatível, `429` limites, `502` falha do GitHub ou do Git, `503` GitHub não configurado, imagem ausente ou Docker indisponível.
+- Status usados: `400` validação, `401` chave, `403` acesso negado pelo GitHub, `404` não encontrado, `409` estado incompatível, `429` limites, `502` falha do GitHub ou do Git, `503` GitHub não configurado, imagem ausente ou Docker indisponível.
 
 ## 11. Checklist do backend AC-WEB
 
 - [ ] `AGENT_GATEWAY_URL` e `AGENT_GATEWAY_KEY` só no ambiente do servidor.
-- [ ] `X-User-Id` sempre vindo da sessão autenticada.
+- [ ] Mapeamento `userId ↔ instanceId` e verificação de propriedade no `ac-services`.
 - [ ] Rotas próprias do AC-WEB, por exemplo `/v1/agents/*`, com o mesmo controle de acesso das demais.
 - [ ] Repasse do SSE sem expor URL nem chave do gateway.
-- [ ] Página de retorno do GitHub (`GITHUB_REDIRECT_URL`) que chama `…/github/callback` com o usuário da sessão.
+- [ ] Página de retorno do GitHub (`GITHUB_REDIRECT_URL`) que chama `POST /api/instances/{id}/github/callback` para a instância do usuário da sessão.
 - [ ] Tradução dos `error.code`, estados de instância, conexão e execução nos 3 idiomas.
 - [ ] Confirmação explícita antes de excluir a instância.

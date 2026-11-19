@@ -46,7 +46,7 @@ func (Codex) Login() *Login {
 	return &Login{Args: []string{"codex", "login", "--device-auth"}}
 }
 
-func (Codex) LogoutArgs() []string { return []string{"codex", "logout"} }
+func (Codex) Logout() *Logout { return &Logout{Args: []string{"codex", "logout"}} }
 
 func (Codex) IsAuthFailure(text string) bool {
 	return containsAny(text, "401 unauthorized", "not logged in", "missing bearer", "refresh token", "invalid api key", "incorrect api key")

@@ -39,14 +39,6 @@ func TestRejectsMissingSecrets(t *testing.T) {
 	}
 }
 
-func TestRejectsSameIntegrationKey(t *testing.T) {
-	m := base()
-	m["INTEGRATION_API_KEY"] = m["API_KEY"]
-	if _, err := Load(env(m)); err == nil {
-		t.Fatal("expected error")
-	}
-}
-
 func TestGitHubAllOrNothing(t *testing.T) {
 	m := base()
 	m["GITHUB_CLIENT_ID"] = "abc"

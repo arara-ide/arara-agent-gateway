@@ -21,30 +21,31 @@ func open(t *testing.T) (*Store, string) {
 	return s, dir
 }
 
-func newInstance(t *testing.T, s *Store, id, user string) Instance {
+func newInstance(t *testing.T, s *Store, id, name string) Instance {
 	t.Helper()
 	now := time.Now().UTC()
-	in, err := s.CreateInstance(context.Background(), Instance{ID: id, UserID: user, State: StateStopped, CreatedAt: now, LastActivityAt: now})
+	in, err := s.CreateInstance(context.Background(), Instance{ID: id, Name: name, State: StateStopped, CreatedAt: now, LastActivityAt: now})
 	if err != nil {
 		t.Fatal(err)
 	}
 	return in
 }
 
-func TestOneInstancePerUser(t *testing.T) {
+func TestMultipleInstancesAllowed(t *testing.T) {
 	s, _ := open(t)
-	newInstance(t, s, "inst_a", "u1")
-	now := time.Now()
-	got, err := s.CreateInstance(context.Background(), Instance{ID: "inst_b", UserID: "u1", State: StateStopped, CreatedAt: now, LastActivityAt: now})
-	if !errors.Is(err, ErrConflict) || got.ID != "inst_a" {
-		t.Fatalf("expected conflict pointing to inst_a, got %v %v", got.ID, err)
+	ctx := context.Background()
+	newInstance(t, s, "inst_a", "same-name")
+	newInstance(t, s, "inst_b", "same-name")
+	list, err := s.ListInstances(ctx)
+	if err != nil || len(list) != 2 {
+		t.Fatalf("list: %d %v", len(list), err)
 	}
 }
 
 func TestHistoryKeepsLatest20(t *testing.T) {
 	s, _ := open(t)
 	ctx := context.Background()
-	newInstance(t, s, "inst_a", "u1")
+	newInstance(t, s, "inst_a", "a")
 	for i := 1; i <= 21; i++ {
 		if err := s.InsertRun(ctx, Run{ID: fmt.Sprintf("run_%02d", i), InstanceID: "inst_a", Agent: "claude", Prompt: "p", Status: RunSucceeded, StartedAt: time.Now()}); err != nil {
 			t.Fatal(err)
@@ -69,8 +70,8 @@ func TestHistoryKeepsLatest20(t *testing.T) {
 func TestHistoryConcurrentInserts(t *testing.T) {
 	s, _ := open(t)
 	ctx := context.Background()
-	newInstance(t, s, "inst_a", "u1")
-	newInstance(t, s, "inst_b", "u2")
+	newInstance(t, s, "inst_a", "a")
+	newInstance(t, s, "inst_b", "b")
 	var wg sync.WaitGroup
 	for i := 0; i < 60; i++ {
 		wg.Add(1)
@@ -102,9 +103,9 @@ func TestHistoryConcurrentInserts(t *testing.T) {
 func TestPersistenceAcrossReopen(t *testing.T) {
 	s, dir := open(t)
 	ctx := context.Background()
-	newInstance(t, s, "inst_a", "u1")
+	newInstance(t, s, "inst_a", "a")
 	_ = s.InsertRun(ctx, Run{ID: "run_1", InstanceID: "inst_a", Agent: "claude", Prompt: "hello", Status: RunRunning, StartedAt: time.Now()})
-	_ = s.UpsertConnection(ctx, Connection{UserID: "u1", Provider: "github", Status: ConnConnected, Secret: "v1:x", UpdatedAt: time.Now()})
+	_ = s.UpsertConnection(ctx, Connection{InstanceID: "inst_a", Provider: "github", Status: ConnConnected, Secret: "v1:x", UpdatedAt: time.Now()})
 	s.Close()
 
 	s2, err := OpenPath(ctx, filepath.Join(dir, "gateway.db"))
@@ -115,7 +116,7 @@ func TestPersistenceAcrossReopen(t *testing.T) {
 	if _, err := s2.GetInstance(ctx, "inst_a"); err != nil {
 		t.Fatal(err)
 	}
-	if c, err := s2.GetConnection(ctx, "u1", "github"); err != nil || c.Status != ConnConnected {
+	if c, err := s2.GetConnection(ctx, "inst_a", "github"); err != nil || c.Status != ConnConnected {
 		t.Fatalf("connection lost: %v", err)
 	}
 	n, err := s2.InterruptRunningRuns(ctx, time.Now())
@@ -128,29 +129,32 @@ func TestPersistenceAcrossReopen(t *testing.T) {
 	}
 }
 
-func TestDeleteInstanceCascadesRuns(t *testing.T) {
+func TestDeleteInstanceCascadesRunsAndConnections(t *testing.T) {
 	s, _ := open(t)
 	ctx := context.Background()
-	newInstance(t, s, "inst_a", "u1")
+	newInstance(t, s, "inst_a", "a")
 	_ = s.InsertRun(ctx, Run{ID: "run_1", InstanceID: "inst_a", Agent: "claude", Prompt: "p", Status: RunSucceeded, StartedAt: time.Now()})
+	_ = s.UpsertConnection(ctx, Connection{InstanceID: "inst_a", Provider: "claude", Status: ConnConnected, Secret: "v1:x", UpdatedAt: time.Now()})
 	if err := s.DeleteInstance(ctx, "inst_a"); err != nil {
 		t.Fatal(err)
 	}
-	var n int
-	_ = s.db.QueryRow(`SELECT COUNT(*) FROM runs`).Scan(&n)
-	if n != 0 {
-		t.Fatalf("runs left: %d", n)
+	var runs, conns int
+	_ = s.db.QueryRow(`SELECT COUNT(*) FROM runs`).Scan(&runs)
+	_ = s.db.QueryRow(`SELECT COUNT(*) FROM connections`).Scan(&conns)
+	if runs != 0 || conns != 0 {
+		t.Fatalf("rows left: runs=%d conns=%d", runs, conns)
 	}
 }
 
 func TestOAuthStateSingleUse(t *testing.T) {
 	s, _ := open(t)
 	ctx := context.Background()
-	if err := s.PutOAuthState(ctx, OAuthState{StateHash: "h", UserID: "u1", Verifier: "v", ExpiresAt: time.Now().Add(time.Minute)}); err != nil {
+	newInstance(t, s, "inst_a", "a")
+	if err := s.PutOAuthState(ctx, OAuthState{StateHash: "h", InstanceID: "inst_a", Verifier: "v", ExpiresAt: time.Now().Add(time.Minute)}); err != nil {
 		t.Fatal(err)
 	}
 	st, err := s.TakeOAuthState(ctx, "h")
-	if err != nil || st.UserID != "u1" {
+	if err != nil || st.InstanceID != "inst_a" {
 		t.Fatalf("take: %v", err)
 	}
 	if _, err := s.TakeOAuthState(ctx, "h"); !errors.Is(err, ErrNotFound) {

@@ -27,8 +27,6 @@ func newError(status int, code, message string) *apiError {
 var (
 	errUnauthorized = newError(http.StatusUnauthorized, "unauthorized", "Missing or invalid apikey header")
 	errNotFound     = newError(http.StatusNotFound, "not_found", "Resource not found")
-	errUserRequired = newError(http.StatusBadRequest, "user_scope_required", "This key requires the X-User-Id header")
-	errInvalidUser  = newError(http.StatusBadRequest, "invalid_user_id", "User IDs must match ^[A-Za-z0-9._:@-]{1,128}$")
 	errBadJSON      = newError(http.StatusBadRequest, "invalid_json", "Request body must be a valid JSON object with known fields")
 	errConfirm      = newError(http.StatusBadRequest, "confirmation_required", "Pass confirm=<instance id> to delete an instance")
 )
@@ -48,7 +46,7 @@ var errorTable = []struct {
 	{run.ErrInvalidModel, newError(http.StatusBadRequest, "invalid_model", "Invalid model")},
 	{run.ErrAgentBusy, newError(http.StatusConflict, "agent_busy", run.ErrAgentBusy.Error())},
 	{run.ErrInstanceBusy, newError(http.StatusTooManyRequests, "instance_busy", run.ErrInstanceBusy.Error())},
-	{run.ErrNotAuthenticated, newError(http.StatusConflict, "agent_not_authenticated", "Connect this agent for the user before running it")},
+	{run.ErrNotAuthenticated, newError(http.StatusConflict, "agent_not_authenticated", "Connect this agent in this instance before running it")},
 	{run.ErrRunFinished, newError(http.StatusConflict, "run_not_active", "The run is not active")},
 	{connect.ErrMethodUnsupported, newError(http.StatusBadRequest, "method_not_supported", "This connection method is not supported by the agent")},
 	{connect.ErrInvalidAPIKey, newError(http.StatusBadRequest, "invalid_api_key", "The API key format is invalid")},

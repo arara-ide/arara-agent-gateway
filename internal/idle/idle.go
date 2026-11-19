@@ -13,7 +13,7 @@ type Stopper interface {
 }
 
 type Lister interface {
-	ListInstances(ctx context.Context, userID string) ([]store.Instance, error)
+	ListInstances(ctx context.Context) ([]store.Instance, error)
 }
 
 type Manager struct {
@@ -42,7 +42,7 @@ func (m *Manager) Run(ctx context.Context) {
 }
 
 func (m *Manager) Check(ctx context.Context) int {
-	instances, err := m.list.ListInstances(ctx, "")
+	instances, err := m.list.ListInstances(ctx)
 	if err != nil {
 		m.log.Warn("idle check: list instances", "error", err)
 		return 0

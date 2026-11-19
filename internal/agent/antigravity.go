@@ -9,7 +9,7 @@ type Antigravity struct{}
 
 func (Antigravity) Name() string      { return "antigravity" }
 func (Antigravity) Title() string     { return "Google Antigravity" }
-func (Antigravity) Methods() []string { return []string{MethodAPIKey} }
+func (Antigravity) Methods() []string { return []string{MethodAccount, MethodAPIKey} }
 
 func (Antigravity) Run(in RunInput) Command {
 	args := []string{"agy", "--print=" + in.Prompt, "--output-format", "stream-json", "--dangerously-skip-permissions"}
@@ -27,13 +27,48 @@ func (Antigravity) Run(in RunInput) Command {
 
 func (Antigravity) APIKeyEnv(key string) []string { return []string{"GEMINI_API_KEY=" + key} }
 
-func (Antigravity) StatusArgs() []string { return nil }
+func (Antigravity) StatusArgs() []string {
+	return []string{"agy", "--output-format", "json", "models"}
+}
 
-func (Antigravity) ParseStatus(int, string) (bool, string) { return false, "" }
+func (Antigravity) ParseStatus(exitCode int, stdout string) (bool, string) {
+	if exitCode != 0 {
+		return false, ""
+	}
+	var out struct {
+		Status   string `json:"status"`
+		Response string `json:"response"`
+	}
+	start := strings.Index(stdout, "{")
+	if start < 0 || json.Unmarshal([]byte(stdout[start:]), &out) != nil {
+		return false, ""
+	}
+	if out.Status == "SUCCESS" && strings.TrimSpace(out.Response) != "" {
+		return true, "Google"
+	}
+	return false, ""
+}
 
-func (Antigravity) Login() *Login { return nil }
+func (Antigravity) Login() *Login {
+	return &Login{
+		Args:       []string{"agy"},
+		Env:        []string{"SSH_CONNECTION=1 2 3 4", "TERM=xterm-256color"},
+		Tty:        true,
+		NeedsInput: true,
+		AutoSend:   []AutoSend{{Match: "select login method", Input: "\r"}},
+		Success:    []string{"successfully signed in", "signed in as", "login successful", "authentication successful"},
+		Failure:    []string{"got an error:", "token exchange failed", "invalid_grant"},
+	}
+}
 
-func (Antigravity) LogoutArgs() []string { return nil }
+func (Antigravity) Logout() *Logout {
+	return &Logout{
+		Args: []string{"agy", "-i", "/logout"},
+		Env:  []string{"TERM=xterm-256color"},
+		Tty:  true,
+		Done: []string{"logged out", "signed out", "not signed in"},
+	}
+}
 
 func (Antigravity) IsAuthFailure(text string) bool {
 	return containsAny(text, "authentication required", "please sign in", "not authenticated", "api key not valid", "api_key_invalid", "permission_denied")

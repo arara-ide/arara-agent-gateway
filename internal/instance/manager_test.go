@@ -13,9 +13,9 @@ import (
 
 func TestCreateDoesNotStartContainer(t *testing.T) {
 	env := testutil.NewEnv(t, 10)
-	in, created, err := env.Instances.Create(context.Background(), "user-1", "main")
-	if err != nil || !created {
-		t.Fatalf("create: %v %v", created, err)
+	in, err := env.Instances.Create(context.Background(), "main")
+	if err != nil {
+		t.Fatalf("create: %v", err)
 	}
 	if in.State != store.StateStopped {
 		t.Fatalf("state %s", in.State)
@@ -23,9 +23,9 @@ func TestCreateDoesNotStartContainer(t *testing.T) {
 	if _, ok := env.Engine.Container(instance.ContainerName(in.ID)); ok {
 		t.Fatal("container created on instance creation")
 	}
-	again, created, err := env.Instances.Create(context.Background(), "user-1", "other")
-	if err != nil || created || again.ID != in.ID {
-		t.Fatalf("second create should return existing: %v %v", created, err)
+	second, err := env.Instances.Create(context.Background(), "other")
+	if err != nil || second.ID == in.ID {
+		t.Fatalf("second create should create a new instance: %v %s", err, second.ID)
 	}
 }
 
@@ -96,8 +96,8 @@ func TestStopPreservesVolumeAndDeleteRemovesIt(t *testing.T) {
 
 func TestCapacityLimit(t *testing.T) {
 	env := testutil.NewEnv(t, 1)
-	env.Running(t, "user-1")
-	other, _, _ := env.Instances.Create(context.Background(), "user-2", "")
+	env.Running(t, "one")
+	other, _ := env.Instances.Create(context.Background(), "two")
 	if _, err := env.Instances.Start(context.Background(), other.ID); !errors.Is(err, instance.ErrCapacity) {
 		t.Fatalf("expected capacity error, got %v", err)
 	}
@@ -110,7 +110,7 @@ func TestCapacityLimit(t *testing.T) {
 func TestMissingImage(t *testing.T) {
 	env := testutil.NewEnv(t, 10)
 	delete(env.Engine.Images, testutil.Image)
-	in, _, _ := env.Instances.Create(context.Background(), "user-1", "")
+	in, _ := env.Instances.Create(context.Background(), "one")
 	if _, err := env.Instances.Start(context.Background(), in.ID); !errors.Is(err, instance.ErrImageMissing) {
 		t.Fatalf("expected image missing, got %v", err)
 	}
@@ -118,7 +118,7 @@ func TestMissingImage(t *testing.T) {
 
 func TestAcquireRequiresRunning(t *testing.T) {
 	env := testutil.NewEnv(t, 10)
-	in, _, _ := env.Instances.Create(context.Background(), "user-1", "")
+	in, _ := env.Instances.Create(context.Background(), "one")
 	if _, err := env.Instances.Acquire(context.Background(), in.ID); !errors.Is(err, instance.ErrNotRunning) {
 		t.Fatalf("expected not running, got %v", err)
 	}

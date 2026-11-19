@@ -100,7 +100,7 @@ func TestActiveWorkIsNeverInterrupted(t *testing.T) {
 
 func TestDoesNotStartStoppedInstances(t *testing.T) {
 	env, m := setup(t, defaultTimeout)
-	in, _, _ := env.Instances.Create(context.Background(), "user-1", "")
+	in, _ := env.Instances.Create(context.Background(), "one")
 	env.Clock.Advance(time.Hour)
 	m.Check(context.Background())
 	if state(t, env, in.ID) != store.StateStopped {

@@ -33,7 +33,7 @@ var (
 	ErrInvalidModel     = errors.New("invalid model")
 	ErrAgentBusy        = errors.New("this agent already has an active run in the instance")
 	ErrInstanceBusy     = errors.New("maximum number of active agents for this instance reached")
-	ErrNotAuthenticated = errors.New("agent is not authenticated for this user")
+	ErrNotAuthenticated = errors.New("agent is not authenticated for this instance")
 	ErrRunNotFound      = errors.New("run not found")
 	ErrRunFinished      = errors.New("run already finished")
 )
@@ -145,7 +145,7 @@ func (m *Manager) Start(ctx context.Context, in store.Instance, name string, req
 	if err != nil {
 		return store.Run{}, err
 	}
-	creds, err := m.conn.Credentials(ctx, in.UserID, a)
+	creds, err := m.conn.Credentials(ctx, in.ID, a)
 	if err != nil {
 		release()
 		return store.Run{}, err
@@ -266,7 +266,7 @@ func (m *Manager) execute(ctx context.Context, in store.Instance, a agent.Adapte
 		r.Status, r.ErrorCode, r.ErrorMessage = store.RunTimedOut, "run_timeout", "The run exceeded the configured timeout"
 	case out.AuthError || ((out.Failed || exitCode != 0) && a.IsAuthFailure(stderr+"\n"+out.Message)):
 		r.Status, r.ErrorCode, r.ErrorMessage = store.RunFailed, "agent_not_authenticated", firstNonEmpty(out.Message, "The agent is not authenticated")
-		m.conn.MarkAuthFailure(context.Background(), in.UserID, a.Name(), creds.Method)
+		m.conn.MarkAuthFailure(context.Background(), in.ID, a.Name(), creds.Method)
 	case execErr != nil:
 		r.Status, r.ErrorCode, r.ErrorMessage = store.RunFailed, "exec_failed", "Could not execute the agent in the instance"
 		m.log.Warn("run exec failed", "run", r.ID, "error", execErr)

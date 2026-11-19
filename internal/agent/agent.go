@@ -45,10 +45,26 @@ type Command struct {
 	Stdin []byte
 }
 
+type AutoSend struct {
+	Match string
+	Input string
+}
+
 type Login struct {
 	Args       []string
+	Env        []string
 	Tty        bool
 	NeedsInput bool
+	AutoSend   []AutoSend
+	Success    []string
+	Failure    []string
+}
+
+type Logout struct {
+	Args []string
+	Env  []string
+	Tty  bool
+	Done []string
 }
 
 type Adapter interface {
@@ -61,7 +77,7 @@ type Adapter interface {
 	StatusArgs() []string
 	ParseStatus(exitCode int, stdout string) (bool, string)
 	Login() *Login
-	LogoutArgs() []string
+	Logout() *Logout
 	IsAuthFailure(text string) bool
 }
 
@@ -122,7 +138,7 @@ func FindDeviceCode(text string) string {
 	return codePattern.FindString(StripANSI(text))
 }
 
-func containsAny(text string, needles ...string) bool {
+func ContainsAny(text string, needles ...string) bool {
 	lower := strings.ToLower(text)
 	for _, n := range needles {
 		if strings.Contains(lower, n) {
@@ -130,6 +146,10 @@ func containsAny(text string, needles ...string) bool {
 		}
 	}
 	return false
+}
+
+func containsAny(text string, needles ...string) bool {
+	return ContainsAny(text, needles...)
 }
 
 func truncate(s string, n int) string {

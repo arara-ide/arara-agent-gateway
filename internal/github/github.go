@@ -99,7 +99,7 @@ func New(cfg Config, s *store.Store, box *secret.Box, client *http.Client, now f
 
 func (s *Service) Enabled() bool { return s.cfg.ClientID != "" }
 
-func secretAD(userID string) string { return "connection:" + Provider + ":" + userID }
+func secretAD(instanceID string) string { return "connection:" + Provider + ":" + instanceID }
 
 func hashState(state string) string {
 	sum := sha256.Sum256([]byte(state))
@@ -112,21 +112,18 @@ func randomToken(n int) string {
 	return base64.RawURLEncoding.EncodeToString(b)
 }
 
-func (s *Service) Connect(ctx context.Context, userID string) (string, time.Time, error) {
+func (s *Service) Connect(ctx context.Context, instanceID string) (string, time.Time, error) {
 	if !s.Enabled() {
 		return "", time.Time{}, ErrDisabled
 	}
 	state := randomToken(32)
 	verifier := randomToken(48)
-	sealed, err := s.box.Seal([]byte(verifier), "oauth-state:"+userID)
+	sealed, err := s.box.Seal([]byte(verifier), "oauth-state:"+instanceID)
 	if err != nil {
 		return "", time.Time{}, err
 	}
 	expires := s.now().UTC().Add(stateTTL)
-	if err := s.store.EnsureUser(ctx, userID, s.now().UTC()); err != nil {
-		return "", time.Time{}, err
-	}
-	if err := s.store.PutOAuthState(ctx, store.OAuthState{StateHash: hashState(state), UserID: userID, Verifier: sealed, ExpiresAt: expires}); err != nil {
+	if err := s.store.PutOAuthState(ctx, store.OAuthState{StateHash: hashState(state), InstanceID: instanceID, Verifier: sealed, ExpiresAt: expires}); err != nil {
 		return "", time.Time{}, err
 	}
 	challenge := sha256.Sum256([]byte(verifier))
@@ -144,7 +141,7 @@ func (s *Service) Connect(ctx context.Context, userID string) (string, time.Time
 	return s.cfg.WebURL + "/login/oauth/authorize?" + q.Encode(), expires, nil
 }
 
-func (s *Service) Complete(ctx context.Context, userID, code, state string) (store.Connection, error) {
+func (s *Service) Complete(ctx context.Context, instanceID, code, state string) (store.Connection, error) {
 	if !s.Enabled() {
 		return store.Connection{}, ErrDisabled
 	}
@@ -158,10 +155,10 @@ func (s *Service) Complete(ctx context.Context, userID, code, state string) (sto
 	if err != nil {
 		return store.Connection{}, err
 	}
-	if st.UserID != userID || s.now().After(st.ExpiresAt) {
+	if st.InstanceID != instanceID || s.now().After(st.ExpiresAt) {
 		return store.Connection{}, ErrInvalidState
 	}
-	verifier, err := s.box.Open(st.Verifier, "oauth-state:"+userID)
+	verifier, err := s.box.Open(st.Verifier, "oauth-state:"+instanceID)
 	if err != nil {
 		return store.Connection{}, ErrInvalidState
 	}
@@ -180,19 +177,19 @@ func (s *Service) Complete(ctx context.Context, userID, code, state string) (sto
 		return store.Connection{}, err
 	}
 	tok.Login, tok.UserID = id.Login, id.UserID
-	return s.save(ctx, userID, tok)
+	return s.save(ctx, instanceID, tok)
 }
 
-func (s *Service) save(ctx context.Context, userID string, tok Token) (store.Connection, error) {
+func (s *Service) save(ctx context.Context, instanceID string, tok Token) (store.Connection, error) {
 	raw, err := json.Marshal(tok)
 	if err != nil {
 		return store.Connection{}, err
 	}
-	sealed, err := s.box.Seal(raw, secretAD(userID))
+	sealed, err := s.box.Seal(raw, secretAD(instanceID))
 	if err != nil {
 		return store.Connection{}, err
 	}
-	c := store.Connection{UserID: userID, Provider: Provider, Status: store.ConnConnected, Method: "oauth", Account: tok.Login, Secret: sealed, UpdatedAt: s.now().UTC()}
+	c := store.Connection{InstanceID: instanceID, Provider: Provider, Status: store.ConnConnected, Method: "oauth", Account: tok.Login, Secret: sealed, UpdatedAt: s.now().UTC()}
 	return c, s.store.UpsertConnection(ctx, c)
 }
 
@@ -278,15 +275,15 @@ func (s *Service) identity(ctx context.Context, token string) (Identity, error) 
 	return Identity{Login: u.Login, UserID: u.ID}, nil
 }
 
-func (s *Service) markExpired(ctx context.Context, userID string, c store.Connection) {
+func (s *Service) markExpired(ctx context.Context, c store.Connection) {
 	c.Status, c.Error, c.UpdatedAt = store.ConnExpired, "token rejected by github", s.now().UTC()
 	_ = s.store.UpsertConnection(ctx, c)
 }
 
-func (s *Service) Token(ctx context.Context, userID string) (Token, error) {
+func (s *Service) Token(ctx context.Context, instanceID string) (Token, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	c, err := s.store.GetConnection(ctx, userID, Provider)
+	c, err := s.store.GetConnection(ctx, instanceID, Provider)
 	if errors.Is(err, store.ErrNotFound) || (err == nil && (c.Secret == "" || c.Status == store.ConnDisconnected)) {
 		return Token{}, ErrNotConnected
 	}
@@ -296,7 +293,7 @@ func (s *Service) Token(ctx context.Context, userID string) (Token, error) {
 	if c.Status == store.ConnExpired {
 		return Token{}, ErrExpired
 	}
-	raw, err := s.box.Open(c.Secret, secretAD(userID))
+	raw, err := s.box.Open(c.Secret, secretAD(instanceID))
 	if err != nil {
 		return Token{}, err
 	}
@@ -308,7 +305,7 @@ func (s *Service) Token(ctx context.Context, userID string) (Token, error) {
 		return tok, nil
 	}
 	if tok.RefreshToken == "" || (!tok.RefreshExpiresAt.IsZero() && s.now().After(tok.RefreshExpiresAt)) {
-		s.markExpired(ctx, userID, c)
+		s.markExpired(ctx, c)
 		return Token{}, ErrExpired
 	}
 	next, err := s.exchange(ctx, url.Values{
@@ -318,39 +315,39 @@ func (s *Service) Token(ctx context.Context, userID string) (Token, error) {
 		"refresh_token": {tok.RefreshToken},
 	})
 	if errors.Is(err, ErrInvalidState) {
-		s.markExpired(ctx, userID, c)
+		s.markExpired(ctx, c)
 		return Token{}, ErrExpired
 	}
 	if err != nil {
 		return Token{}, err
 	}
 	next.Login, next.UserID = tok.Login, tok.UserID
-	if _, err := s.save(ctx, userID, next); err != nil {
+	if _, err := s.save(ctx, instanceID, next); err != nil {
 		return Token{}, err
 	}
 	return next, nil
 }
 
-func (s *Service) Status(ctx context.Context, userID string) (store.Connection, error) {
-	c, err := s.store.GetConnection(ctx, userID, Provider)
+func (s *Service) Status(ctx context.Context, instanceID string) (store.Connection, error) {
+	c, err := s.store.GetConnection(ctx, instanceID, Provider)
 	if errors.Is(err, store.ErrNotFound) {
-		return store.Connection{UserID: userID, Provider: Provider, Status: store.ConnDisconnected}, nil
+		return store.Connection{InstanceID: instanceID, Provider: Provider, Status: store.ConnDisconnected}, nil
 	}
 	if err != nil || c.Status != store.ConnConnected {
 		return c, err
 	}
-	tok, err := s.Token(ctx, userID)
+	tok, err := s.Token(ctx, instanceID)
 	if errors.Is(err, ErrExpired) {
-		return s.store.GetConnection(ctx, userID, Provider)
+		return s.store.GetConnection(ctx, instanceID, Provider)
 	}
 	if err != nil {
 		return c, nil
 	}
 	if _, err := s.identity(ctx, tok.AccessToken); errors.Is(err, ErrExpired) {
-		s.markExpired(ctx, userID, c)
-		return s.store.GetConnection(ctx, userID, Provider)
+		s.markExpired(ctx, c)
+		return s.store.GetConnection(ctx, instanceID, Provider)
 	}
-	return s.store.GetConnection(ctx, userID, Provider)
+	return s.store.GetConnection(ctx, instanceID, Provider)
 }
 
 type Repo struct {
@@ -361,8 +358,8 @@ type Repo struct {
 	UpdatedAt     time.Time `json:"updated_at"`
 }
 
-func (s *Service) Repos(ctx context.Context, userID string, page int) ([]Repo, bool, error) {
-	tok, err := s.Token(ctx, userID)
+func (s *Service) Repos(ctx context.Context, instanceID string, page int) ([]Repo, bool, error) {
+	tok, err := s.Token(ctx, instanceID)
 	if err != nil {
 		return nil, false, err
 	}
@@ -380,7 +377,7 @@ func (s *Service) Repos(ctx context.Context, userID string, page int) ([]Repo, b
 	}
 	status, header, err := s.api(ctx, tok.AccessToken, http.MethodGet, "/user/repos?per_page=100&sort=updated&page="+strconv.Itoa(page), &raw)
 	if errors.Is(err, ErrExpired) {
-		s.expireByUser(ctx, userID)
+		s.expireByInstance(ctx, instanceID)
 		return nil, false, err
 	}
 	if err != nil {
@@ -396,18 +393,18 @@ func (s *Service) Repos(ctx context.Context, userID string, page int) ([]Repo, b
 	return out, strings.Contains(header.Get("Link"), `rel="next"`), nil
 }
 
-func (s *Service) expireByUser(ctx context.Context, userID string) {
-	if c, err := s.store.GetConnection(ctx, userID, Provider); err == nil {
-		s.markExpired(ctx, userID, c)
+func (s *Service) expireByInstance(ctx context.Context, instanceID string) {
+	if c, err := s.store.GetConnection(ctx, instanceID, Provider); err == nil {
+		s.markExpired(ctx, c)
 	}
 }
 
-func (s *Service) Repo(ctx context.Context, userID, fullName string) (Repo, Token, error) {
+func (s *Service) Repo(ctx context.Context, instanceID, fullName string) (Repo, Token, error) {
 	owner, name, err := ParseFullName(fullName)
 	if err != nil {
 		return Repo{}, Token{}, err
 	}
-	tok, err := s.Token(ctx, userID)
+	tok, err := s.Token(ctx, instanceID)
 	if err != nil {
 		return Repo{}, Token{}, err
 	}
@@ -421,7 +418,7 @@ func (s *Service) Repo(ctx context.Context, userID, fullName string) (Repo, Toke
 	}
 	status, _, err := s.api(ctx, tok.AccessToken, http.MethodGet, "/repos/"+url.PathEscape(owner)+"/"+url.PathEscape(name), &raw)
 	if errors.Is(err, ErrExpired) {
-		s.expireByUser(ctx, userID)
+		s.expireByInstance(ctx, instanceID)
 		return Repo{}, Token{}, err
 	}
 	if err != nil {
@@ -436,19 +433,19 @@ func (s *Service) Repo(ctx context.Context, userID, fullName string) (Repo, Toke
 	return Repo{FullName: raw.FullName, Private: raw.Private, DefaultBranch: raw.DefaultBranch, CanPush: raw.Permissions.Push}, tok, nil
 }
 
-func (s *Service) Disconnect(ctx context.Context, userID string) (store.Connection, error) {
+func (s *Service) Disconnect(ctx context.Context, instanceID string) (store.Connection, error) {
 	s.mu.Lock()
-	c, err := s.store.GetConnection(ctx, userID, Provider)
+	c, err := s.store.GetConnection(ctx, instanceID, Provider)
 	s.mu.Unlock()
 	if err == nil && c.Secret != "" && s.Enabled() {
-		if raw, oerr := s.box.Open(c.Secret, secretAD(userID)); oerr == nil {
+		if raw, oerr := s.box.Open(c.Secret, secretAD(instanceID)); oerr == nil {
 			var tok Token
 			if json.Unmarshal(raw, &tok) == nil {
 				s.revoke(ctx, tok.AccessToken)
 			}
 		}
 	}
-	next := store.Connection{UserID: userID, Provider: Provider, Status: store.ConnDisconnected, UpdatedAt: s.now().UTC()}
+	next := store.Connection{InstanceID: instanceID, Provider: Provider, Status: store.ConnDisconnected, UpdatedAt: s.now().UTC()}
 	return next, s.store.UpsertConnection(ctx, next)
 }
 

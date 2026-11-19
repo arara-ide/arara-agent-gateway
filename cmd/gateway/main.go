@@ -93,7 +93,7 @@ func runMain() error {
 
 	srv := &http.Server{
 		Addr:              ":" + strconv.Itoa(cfg.Port),
-		Handler:           api.New(api.Deps{Store: st, Engine: engine, Instances: instances, Runs: runs, Connections: conns, GitHub: gh, Workspace: ws, APIKey: cfg.APIKey, IntegrationAPIKey: cfg.IntegrationAPIKey, IdleTimeout: cfg.IdleTimeout, AutoStart: cfg.AutoStart, Web: gateway.Web(), OpenAPI: gateway.OpenAPI, Log: log, Version: version}),
+		Handler:           api.New(api.Deps{Store: st, Engine: engine, Instances: instances, Runs: runs, Connections: conns, GitHub: gh, Workspace: ws, APIKey: cfg.APIKey, IdleTimeout: cfg.IdleTimeout, AutoStart: cfg.AutoStart, Web: gateway.Web(), OpenAPI: gateway.OpenAPI, Log: log, Version: version}),
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       30 * time.Second,
 		IdleTimeout:       120 * time.Second,

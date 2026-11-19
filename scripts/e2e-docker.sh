@@ -7,7 +7,6 @@ WORK="$(mktemp -d)"
 PORT="${E2E_PORT:-$((20000 + RANDOM % 20000))}"
 NETWORK="aag-e2e-$RANDOM"
 ADMIN="$(openssl rand -hex 24)"
-INTEGRATION="$(openssl rand -hex 24)"
 ENC="$(openssl rand -hex 32)"
 BASE="http://127.0.0.1:$PORT/api"
 GW_PID=""
@@ -19,7 +18,7 @@ ok() { PASS=$((PASS + 1)); printf '  ok  %s\n' "$*"; }
 
 start_gateway() {
   env -i PATH="$PATH" HOME="$WORK" \
-    API_KEY="$ADMIN" INTEGRATION_API_KEY="$INTEGRATION" CREDENTIALS_ENCRYPTION_KEY="$ENC" \
+    API_KEY="$ADMIN" CREDENTIALS_ENCRYPTION_KEY="$ENC" \
     PORT="$PORT" DATA_DIR="$WORK/data" LOG_LEVEL=info \
     IDLE_TIMEOUT_SECONDS=30 IDLE_CHECK_INTERVAL_SECONDS=2 \
     CONTAINER_MEMORY=1g CONTAINER_CPUS=1 CONTAINER_NETWORK="$NETWORK" RUNTIME_IMAGE="$IMAGE" \
@@ -61,10 +60,9 @@ cleanup() {
 trap cleanup EXIT
 
 req() {
-  local method="$1" path="$2" key="$3" user="$4" body="${5:-}"
+  local method="$1" path="$2" key="$3" body="${4:-}"
   local args=(-sS -o "$WORK/body" -w '%{http_code}' -X "$method" "$BASE$path")
   [ -n "$key" ] && args+=(-H "apikey: $key")
-  [ -n "$user" ] && args+=(-H "X-User-Id: $user")
   [ -n "$body" ] && args+=(-H 'Content-Type: application/json' -d "$body")
   STATUS="$(curl "${args[@]}")"
   BODY="$(cat "$WORK/body")"
@@ -82,18 +80,22 @@ start_gateway
 CREATED=""
 
 log "authentication"
-req GET /instances "" ""; expect 401 "missing apikey is rejected"
-req GET /instances "wrong" ""; expect 401 "invalid apikey is rejected"
-req GET /instances "$INTEGRATION" ""; expect 400 "integration key requires X-User-Id"
-req GET /instances "$ADMIN" ""; expect 200 "admin key is accepted"
+req GET /instances ""; expect 401 "missing apikey is rejected"
+req GET /instances "wrong"; expect 401 "invalid apikey is rejected"
+req GET /instances "$ADMIN"; expect 200 "apikey is accepted"
 
 log "instance lifecycle"
-req POST /instances "$INTEGRATION" e2e-user-a '{"name":"e2e"}'; expect 201 "create instance"
+req POST /instances "$ADMIN" '{"name":"e2e-a"}'; expect 201 "create first instance"
 A="$(jq -r .instance.id <<<"$BODY")"; CREATED="$A"
 [ "$(jq -r .instance.state <<<"$BODY")" = stopped ] || fail "new instance must be stopped"
 docker container inspect "aag-$A" >/dev/null 2>&1 && fail "container created before start"
 ok "creation does not start a container"
-req POST "/instances/$A/start" "$INTEGRATION" e2e-user-a; expect 200 "start instance"
+req POST /instances "$ADMIN" '{"name":"e2e-b"}'; expect 201 "create second instance freely"
+B="$(jq -r .instance.id <<<"$BODY")"; CREATED="$A $B"
+[ "$A" != "$B" ] || fail "second instance reused first id"
+ok "multiple instances can be created"
+
+req POST "/instances/$A/start" "$ADMIN"; expect 200 "start instance"
 [ "$(jq -r .instance.state <<<"$BODY")" = running ] || fail "instance not running"
 INSPECT="$(docker container inspect "aag-$A")"
 [ "$(jq -r '.[0].Config.User' <<<"$INSPECT")" = "1000:1000" ] || fail "container user"
@@ -108,33 +110,44 @@ docker exec "aag-$A" sh -c 'test ! -e /var/run/docker.sock && ! touch /usr/x 2>/
 ok "non-root user, read-only rootfs, writable home volume"
 docker exec "aag-$A" sh -c 'mkdir -p ~/.codex/sessions && touch -d "40 days ago" ~/.codex/sessions/old.jsonl && touch ~/.codex/sessions/new.jsonl'
 
-req POST "/instances/$A/start" "$INTEGRATION" e2e-user-a; expect 200 "start is idempotent"
+req POST "/instances/$A/start" "$ADMIN"; expect 200 "start is idempotent"
 
 log "agents"
-req GET "/instances/$A/agents" "$INTEGRATION" e2e-user-a; expect 200 "agent status"
-[ "$(jq -r '[.agents[] | select(.provider=="claude" or .provider=="codex") | .status] | unique | join(",")' <<<"$BODY")" = setup_required ] || fail "fresh agents should need setup: $BODY"
-ok "fresh instance reports setup_required"
-req POST "/instances/$A/agents/claude/run" "$INTEGRATION" e2e-user-a '{"prompt":"hi"}'; expect 409 "claude run without login is rejected"
+req GET "/instances/$A/agents" "$ADMIN"; expect 200 "agent status"
+[ "$(jq -r '[.agents[].status] | unique | join(",")' <<<"$BODY")" = setup_required ] || fail "fresh agents should need setup: $BODY"
+ok "fresh instance reports setup_required for all three agents"
+req POST "/instances/$A/agents/claude/run" "$ADMIN" '{"prompt":"hi"}'; expect 409 "claude run without login is rejected"
 [ "$(jq -r .error.code <<<"$BODY")" = agent_not_authenticated ] || fail "error code"
 if [ "${E2E_SKIP_PROVIDERS:-0}" != 1 ]; then
-req POST "/instances/$A/agents/claude/login" "$INTEGRATION" e2e-user-a; expect 202 "claude login starts"
+req POST "/instances/$A/agents/claude/login" "$ADMIN"; expect 202 "claude login starts"
 jq -e '.login.url | test("^https://")' <<<"$BODY" >/dev/null || fail "claude login url missing: $BODY"
 jq -e '.login.needs_input == true' <<<"$BODY" >/dev/null || fail "claude login should ask for a code"
 ok "claude login exposes the official URL"
-req DELETE "/instances/$A/agents/claude/login" "$INTEGRATION" e2e-user-a; expect 200 "claude login cancel"
-req POST "/instances/$A/agents/codex/login" "$INTEGRATION" e2e-user-a; expect 202 "codex device login starts"
+req DELETE "/instances/$A/agents/claude/login" "$ADMIN"; expect 200 "claude login cancel"
+
+req POST "/instances/$A/agents/antigravity/login" "$ADMIN"; expect 202 "antigravity login starts"
+jq -e '.login.url | test("^https://accounts\\.google\\.com/")' <<<"$BODY" >/dev/null || fail "antigravity login url missing: $BODY"
+jq -e '.login.needs_input == true' <<<"$BODY" >/dev/null || fail "antigravity login should ask for a code"
+ok "antigravity login exposes the Google OAuth URL"
+req DELETE "/instances/$A/agents/antigravity/login" "$ADMIN"; expect 200 "antigravity login cancel"
+
+req POST "/instances/$A/agents/codex/login" "$ADMIN"; expect 202 "codex device login starts"
 if jq -e '.login.url != null and .login.code != null' <<<"$BODY" >/dev/null; then ok "codex device code captured"; else echo "  note codex login: $(jq -c .login <<<"$BODY")"; fi
-req DELETE "/instances/$A/agents/codex/login" "$INTEGRATION" e2e-user-a; expect 200 "codex login cancel"
+req DELETE "/instances/$A/agents/codex/login" "$ADMIN"; expect 200 "codex login cancel"
 sleep 3
-docker exec "aag-$A" sh -c 'ps -eo comm' | grep -Eq '^(claude|codex)$' && fail "login processes left running"
+docker exec "aag-$A" sh -c 'ps -eo comm' | grep -Eq '^(claude|codex|agy)$' && fail "login processes left running"
 ok "cancelled logins leave no processes"
 
-req PUT /users/e2e-user-a/agents/antigravity/api-key "$INTEGRATION" e2e-user-a '{"api_key":"AIzaInvalidE2EKey000000000"}'; expect 200 "store antigravity api key"
+req PUT "/instances/$A/agents/antigravity/api-key" "$ADMIN" '{"api_key":"AIzaInvalidE2EKey000000000"}'; expect 200 "store antigravity api key"
 grep -q AIzaInvalid "$WORK/data/gateway.db" && fail "api key stored in plaintext"
 ok "api key encrypted at rest"
-req POST "/instances/$A/agents/antigravity/run" "$INTEGRATION" e2e-user-a '{"prompt":"Reply PONG"}'; expect 202 "antigravity run accepted"
+req GET "/instances/$B/connections" "$ADMIN"; expect 200 "second instance connections isolated"
+[ "$(jq -r '.connections[] | select(.provider=="antigravity") | .status' <<<"$BODY")" = setup_required ] || fail "connection leaked between instances: $BODY"
+ok "connections are isolated per instance"
+
+req POST "/instances/$A/agents/antigravity/run" "$ADMIN" '{"prompt":"Reply PONG"}'; expect 202 "antigravity run accepted"
 RUN="$(jq -r .run.id <<<"$BODY")"
-STREAM="$(curl -sS -N --max-time 120 -H "apikey: $INTEGRATION" -H "X-User-Id: e2e-user-a" "$BASE/instances/$A/runs/$RUN/stream")"
+STREAM="$(curl -sS -N --max-time 120 -H "apikey: $ADMIN" "$BASE/instances/$A/runs/$RUN/stream")"
 grep -q '^event: done' <<<"$STREAM" || fail "stream did not finish: $STREAM"
 DONE="$(grep -A1 '^event: done' <<<"$STREAM" | sed -n 's/^data: //p')"
 [ "$(jq -r .status <<<"$DONE")" = failed ] || fail "invalid key run should fail: $DONE"
@@ -143,20 +156,20 @@ docker exec "aag-$A" env | grep -q GEMINI_API_KEY && fail "api key persisted in 
 ok "api key is not part of the container environment"
 
 log "parallel runs and cancellation"
-req PUT /users/e2e-user-a/agents/claude/api-key "$INTEGRATION" e2e-user-a '{"api_key":"sk-ant-invalid-e2e-key-000000"}'; expect 200 "store claude api key"
-req PUT /users/e2e-user-a/agents/codex/api-key "$INTEGRATION" e2e-user-a '{"api_key":"sk-invalid-e2e-key-0000000000"}'; expect 200 "store codex api key"
+req PUT "/instances/$A/agents/claude/api-key" "$ADMIN" '{"api_key":"sk-ant-invalid-e2e-key-000000"}'; expect 200 "store claude api key"
+req PUT "/instances/$A/agents/codex/api-key" "$ADMIN" '{"api_key":"sk-invalid-e2e-key-0000000000"}'; expect 200 "store codex api key"
 for agent in claude codex antigravity; do
-  req POST "/instances/$A/agents/$agent/run" "$INTEGRATION" e2e-user-a '{"prompt":"Reply PONG"}'; expect 202 "$agent run accepted in parallel"
+  req POST "/instances/$A/agents/$agent/run" "$ADMIN" '{"prompt":"Reply PONG"}'; expect 202 "$agent run accepted in parallel"
   eval "RUN_$agent=\"$(jq -r .run.id <<<"$BODY")\""
 done
-req POST "/instances/$A/agents/claude/run" "$INTEGRATION" e2e-user-a '{"prompt":"again"}'
+req POST "/instances/$A/agents/claude/run" "$ADMIN" '{"prompt":"again"}'
 if [ "$STATUS" = 409 ]; then ok "same agent cannot run twice at once"; else echo "  note claude finished before the duplicate check ($STATUS)"; fi
-req POST "/instances/$A/runs/$RUN_codex/cancel" "$INTEGRATION" e2e-user-a
+req POST "/instances/$A/runs/$RUN_codex/cancel" "$ADMIN"
 expect 202 "codex run cancel requested"
 for agent in claude codex antigravity; do
   eval "rid=\$RUN_$agent"
   for _ in $(seq 1 90); do
-    req GET "/instances/$A/runs/$rid" "$INTEGRATION" e2e-user-a
+    req GET "/instances/$A/runs/$rid" "$ADMIN"
     [ "$(jq -r .run.status <<<"$BODY")" != running ] && break
     sleep 1
   done
@@ -175,20 +188,11 @@ ok "no agent processes left after parallel runs"
 
 else
   echo "  skip provider network checks (E2E_SKIP_PROVIDERS=1)"
-  RUN="run_none"
 fi
-
-log "cross-user isolation"
-req POST /instances "$INTEGRATION" e2e-user-b '{}'; expect 201 "create second instance"
-B="$(jq -r .instance.id <<<"$BODY")"; CREATED="$A $B"
-req GET "/instances/$A" "$INTEGRATION" e2e-user-b; expect 404 "user b cannot read instance a"
-req GET "/instances/$A/runs/$RUN/stream" "$INTEGRATION" e2e-user-b; expect 404 "user b cannot stream run of a"
-req POST "/instances/$A/stop" "$INTEGRATION" e2e-user-b; expect 404 "user b cannot stop instance a"
-req GET /users/e2e-user-a/connections "$INTEGRATION" e2e-user-b; expect 404 "user b cannot read connections of a"
 
 log "idle shutdown"
 for _ in $(seq 1 30); do
-  req GET "/instances/$A" "$ADMIN" ""
+  req GET "/instances/$A" "$ADMIN"
   [ "$(jq -r .instance.state <<<"$BODY")" = stopped ] && break
   sleep 2
 done
@@ -200,24 +204,24 @@ ok "idle instance stopped and its volume kept"
 log "persistence across gateway restart"
 stop_gateway
 start_gateway
-req GET "/instances/$A/history" "$ADMIN" ""; expect 200 "history after restart"
+req GET "/instances/$A/history" "$ADMIN"; expect 200 "history after restart"
 want_runs=4
 [ "${E2E_SKIP_PROVIDERS:-0}" = 1 ] && want_runs=0
 [ "$(jq -r '.runs | length' <<<"$BODY")" = "$want_runs" ] || fail "history lost"
-req GET /users/e2e-user-a/connections "$ADMIN" ""; expect 200 "connections after restart"
+req GET "/instances/$A/connections" "$ADMIN"; expect 200 "connections after restart"
 if [ "${E2E_SKIP_PROVIDERS:-0}" != 1 ]; then
   [ "$(jq -r '.connections[] | select(.provider=="antigravity") | .method' <<<"$BODY")" = api_key ] || fail "connection lost"
 fi
-req POST "/instances/$A/start" "$ADMIN" ""; expect 200 "restart instance"
+req POST "/instances/$A/start" "$ADMIN"; expect 200 "restart instance"
 docker exec "aag-$A" test -f /home/agent/marker || fail "volume content lost"
 ok "volume content survives stop and gateway restart"
 docker exec "aag-$A" sh -c 'test ! -e ~/.codex/sessions/old.jsonl && test -e ~/.codex/sessions/new.jsonl' || fail "session retention"
 ok "session files older than the retention are pruned on start"
 
 log "delete"
-req DELETE "/instances/$A" "$ADMIN" ""; expect 400 "delete requires confirmation"
-req DELETE "/instances/$A?confirm=$A" "$ADMIN" ""; expect 204 "delete instance"
+req DELETE "/instances/$A" "$ADMIN"; expect 400 "delete requires confirmation"
+req DELETE "/instances/$A?confirm=$A" "$ADMIN"; expect 204 "delete instance"
 docker container inspect "aag-$A" >/dev/null 2>&1 && fail "container left after delete"
 docker volume inspect "aag-$A" >/dev/null 2>&1 && fail "volume left after delete"
 ok "delete removes container and volume"
-req DELETE "/instances/$B?confirm=$B" "$ADMIN" ""; expect 204 "delete second instance"
+req DELETE "/instances/$B?confirm=$B" "$ADMIN"; expect 204 "delete second instance"

@@ -4,7 +4,7 @@ Registro das escolhas de arquitetura, com motivo e alternativas descartadas. Com
 
 ## Estudo de referência
 
-- **Evolution API**: inspirou o modelo de um servidor central com instâncias independentes, a chave global no cabeçalho `apikey`, a API REST como contrato principal e a dashboard separada como cliente da API. Não reproduzimos o modelo de token por instância, os webhooks, as filas (RabbitMQ, SQS) nem o Prisma com vários bancos. O consumidor aqui é um único backend, e o streaming por SSE resolve o que os webhooks resolvem lá.
+- **Evolution API**: inspirou o modelo de um servidor central com N instâncias independentes sob uma única chave global no cabeçalho `apikey`, a API REST como contrato principal, conexões autocontidas por instância e a dashboard separada como cliente da API. Quem mapeia qual instância pertence a qual usuário é o backend integrador (`ac-services`). Não reproduzimos token por instância, webhooks, filas (RabbitMQ, SQS) nem Prisma com vários bancos: o streaming por SSE resolve o progresso das execuções.
 - **Cezar** (open-mercato/cezar): confirmou como cada CLI é dirigido em modo não interativo.
   - Claude Code: `claude -p --output-format stream-json`, com `--resume`.
   - Codex: Cezar usa o `codex app-server`. Aqui usamos `codex exec --json`, que é mais simples, sem um processo JSON-RPC de longa duração.
@@ -27,28 +27,28 @@ Registro das escolhas de arquitetura, com motivo e alternativas descartadas. Com
 | Contador de atividade em memória mais `last_activity_at` no banco | O desligamento por inatividade usa a mesma trava por instância que `Acquire`, então não há corrida entre o início de uma tarefa e o desligamento. Depois de reiniciar o gateway, execuções antigas viram `interrupted` e o relógio recomeça. | Timer por instância |
 | Um ticker global de inatividade | Custo constante e baixo, mesmo com centenas de instâncias | Goroutine por instância |
 | SSE com buffer de 5.000 eventos por execução e retenção de 2 minutos | Permite reconexão com `Last-Event-ID` sem guardar eventos no banco | WebSocket, eventos persistidos |
+| Overlay `docker-compose.proxy.yml` separado do `docker-compose.yml` | Permite uso local imediato sem redes externas e deploy atrás do Traefik (rede externa e labels) sem conflito de porta entre produção e sandbox | Exigir rede externa no Compose padrão |
 
 ## Autenticação e escopo
 
-- `API_KEY` administrativa, comparada em tempo constante, como na Evolution API.
-- `INTEGRATION_API_KEY` opcional, para o backend do AC-WEB. Ela sempre exige `X-User-Id` e nunca enxerga recursos de outro usuário. Mesmo que vaze, o estrago fica limitado ao usuário enviado no cabeçalho, e a chave nunca dá acesso à listagem global.
-- Recursos de outro usuário respondem `404`, não `403`, para não revelar se existem.
+- Uma única `API_KEY` global, comparada em tempo constante, como na Evolution API.
+- O gateway não armazena usuários nem restringe instâncias por usuário: todas as instâncias são administradas pelo portador da `API_KEY`, e o backend consumidor (`ac-services`) faz o mapeamento e a autorização dos usuários finais.
 - A dashboard guarda a chave só numa variável JavaScript. Nada vai para `localStorage`, cookie ou URL. Por isso o stream usa `fetch` com cabeçalho em vez de `EventSource`, que não aceita cabeçalhos.
 
 ## Credenciais
 
-- Segredos no banco (tokens GitHub e chaves de API dos provedores): AES-256-GCM com `CREDENTIALS_ENCRYPTION_KEY` e o ID do dono como dado associado. Um segredo copiado para outro usuário não abre.
+- Todas as conexões (GitHub e chaves de API dos provedores) pertencem à instância (`PRIMARY KEY (instance_id, provider)` com `ON DELETE CASCADE`).
+- Segredos no banco são cifrados com AES-256-GCM usando `CREDENTIALS_ENCRYPTION_KEY` e o `instance_id` como dado associado. Um segredo copiado para outra instância não abre.
 - Chaves de API dos provedores entram como variável de ambiente só no `exec` da execução. Não ficam no container nem no volume.
-- Logins de conta (Claude e Codex) ficam nos arquivos oficiais dos CLIs dentro do volume (`~/.claude/.credentials.json`, `~/.codex/auth.json`). Os CLIs precisam ler esses arquivos, então não há como cifrá-los no gateway. Mitigação: um volume por usuário, sem montagem cruzada, e recomendação de disco cifrado no host.
-- O Codex é configurado com `cli_auth_credentials_store = "file"`, porque o container não tem keyring.
+- Logins de conta ficam nos arquivos oficiais dos CLIs dentro do volume da instância (`~/.claude/.credentials.json`, `~/.codex/auth.json`, `~/.gemini/antigravity-cli/`). Mitigação: um volume por instância, sem montagem cruzada, e recomendação de disco cifrado no host.
+- O Codex é configurado com `cli_auth_credentials_store = "file"`, porque o container não tem keyring. O `agy` faz fallback automático para armazenamento em arquivo quando o keyring não está disponível no Linux.
 - Tokens GitHub nunca entram no volume. Cada operação Git recebe `http.extraheader` por variáveis `GIT_CONFIG_*`, que valem só para aquele processo.
 
 ## Login dos CLIs
 
 - **Claude Code**: `claude auth login --claudeai` num `exec` com TTY. O gateway extrai a URL oficial e aceita só uma linha de código pelo endpoint `login/input`. Não existe terminal livre.
 - **Codex**: `codex login --device-auth`. O gateway extrai a URL e o código do dispositivo.
-- **Antigravity**: só chave de API (`GEMINI_API_KEY` com `--settings '{"modelProvider":"gemini"}'`, flag listada no `agy --help` 1.5.12). O login Google exige Secret Service/D-Bus no Linux. Além disso, os termos adicionais do Antigravity (seção 6) proíbem acessar o serviço por software de terceiros com o OAuth do Antigravity.
-- **Termos**: a documentação da Anthropic restringe produtos de terceiros que oferecem o login do claude.ai. A forma claramente suportada para uso hospedado é a chave de API própria do usuário. O login de conta ficou disponível porque usa o fluxo oficial do CLI dentro do ambiente isolado do próprio usuário. Antes de oferecê-lo a terceiros, o operador deve conferir os termos da Anthropic e da OpenAI.
+- **Google Antigravity**: `agy` num `exec` com TTY (`SSH_CONNECTION` e `TERM=xterm-256color`, janela 60×1000 para a URL não quebrar linha). O gateway seleciona automaticamente a primeira opção (`Google OAuth`) ao detectar `Select login method:`, extrai a URL `https://accounts.google.com/o/oauth2/auth…`, envia o código único recebido em `login/input` e encerra o TUI assim que a autenticação conclui (por texto de confirmação ou sondagem via `agy --output-format json models`) ou falha. O logout usa `agy -i /logout` em TTY e encerra ao detectar confirmação ou estado deslogado. Também aceita `GEMINI_API_KEY` com `--settings '{"modelProvider":"gemini"}'`.
 
 ## Git
 
@@ -65,7 +65,6 @@ Registro das escolhas de arquitetura, com motivo e alternativas descartadas. Com
 ## Isolamento e limites conhecidos
 
 - Container de instância com usuário 1000, `cap_drop: ALL`, `no-new-privileges`, rootfs somente leitura, `/tmp` em tmpfs de 1 GB, limites de memória, CPU e PIDs, `Init`, sem socket do Docker e rede bridge com `enable_icc=false`.
-- Containers não equivalem a VMs: os agentes executam código arbitrário. Para vários clientes, use `CONTAINER_RUNTIME=runsc` (gVisor, funciona sem KVM) e uma máquina dedicada, separada de bancos e serviços de produção.
-- A rede de saída fica aberta, porque os CLIs precisam das APIs dos provedores, do npm e do GitHub. Para bloquear o acesso à rede do host e a metadados de nuvem, crie regras na cadeia `DOCKER-USER` do host.
+- Para endurecimento adicional, pode-se ativar `CONTAINER_RUNTIME=runsc` (gVisor) e regras na cadeia `DOCKER-USER` bloqueando acesso à rede do host e a metadados de nuvem.
 - Volumes locais do Docker não têm cota de disco. Monitore o uso ou use um driver de volume com cota.
 - O gateway precisa do socket do Docker, que equivale a root no host. Proteja o processo e não o exponha sem TLS.

@@ -47,7 +47,7 @@ func (Claude) Login() *Login {
 	return &Login{Args: []string{"claude", "auth", "login", "--claudeai"}, Tty: true, NeedsInput: true}
 }
 
-func (Claude) LogoutArgs() []string { return []string{"claude", "auth", "logout"} }
+func (Claude) Logout() *Logout { return &Logout{Args: []string{"claude", "auth", "logout"}} }
 
 func (Claude) IsAuthFailure(text string) bool {
 	return containsAny(text, "not logged in", "please run /login", "invalid api key", "authentication_error", "oauth token has expired", "oauth token revoked")

@@ -13,9 +13,9 @@ import (
 
 func TestSyncInjectsTokenOnlyInEnv(t *testing.T) {
 	gh, f, env := setup(t)
-	state := authorize(t, gh, f, "user-1", "abc")
-	gh.Complete(context.Background(), "user-1", "abc", state)
-	in := env.Running(t, "user-1")
+	in := env.Running(t, "one")
+	state := authorize(t, gh, f, in.ID, "abc")
+	gh.Complete(context.Background(), in.ID, "abc", state)
 	env.Engine.SetHandler(func(e *fakedocker.Exec) int {
 		if e.Spec.Cmd[0] == "test" {
 			return 1
@@ -49,9 +49,9 @@ func TestSyncInjectsTokenOnlyInEnv(t *testing.T) {
 
 func TestPushRules(t *testing.T) {
 	gh, f, env := setup(t)
-	state := authorize(t, gh, f, "user-1", "abc")
-	gh.Complete(context.Background(), "user-1", "abc", state)
-	in := env.Running(t, "user-1")
+	in := env.Running(t, "one")
+	state := authorize(t, gh, f, in.ID, "abc")
+	gh.Complete(context.Background(), in.ID, "abc", state)
 	ws := github.NewWorkspace(gh, env.Engine)
 	if _, err := ws.Push(context.Background(), in, "octo/app", "claude", "main"); !errors.Is(err, github.ErrInvalidBranch) {
 		t.Fatalf("push to main allowed: %v", err)

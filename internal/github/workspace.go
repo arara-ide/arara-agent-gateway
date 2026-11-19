@@ -87,7 +87,7 @@ type LocalRepo struct {
 }
 
 func (w *Workspace) Sync(ctx context.Context, in store.Instance, fullName string) (LocalRepo, error) {
-	repo, tok, err := w.gh.Repo(ctx, in.UserID, fullName)
+	repo, tok, err := w.gh.Repo(ctx, in.ID, fullName)
 	if err != nil {
 		return LocalRepo{}, err
 	}
@@ -182,7 +182,7 @@ func (w *Workspace) Push(ctx context.Context, in store.Instance, fullName, agent
 	if !branchPattern.MatchString(branch) || strings.Contains(branch, "..") || strings.HasSuffix(branch, ".lock") {
 		return "", ErrInvalidBranch
 	}
-	repo, tok, err := w.gh.Repo(ctx, in.UserID, fullName)
+	repo, tok, err := w.gh.Repo(ctx, in.ID, fullName)
 	if err != nil {
 		return "", err
 	}

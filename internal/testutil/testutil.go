@@ -79,9 +79,9 @@ func NewEnv(t testing.TB, maxActive int) *Env {
 	return &Env{Store: s, Dir: dir, Engine: e, Clock: clock, Box: Box(t), Instances: instance.NewManager(s, e, Settings(maxActive), clock.Now, Logger())}
 }
 
-func (env *Env) Running(t testing.TB, user string) store.Instance {
+func (env *Env) Running(t testing.TB, name string) store.Instance {
 	t.Helper()
-	in, _, err := env.Instances.Create(context.Background(), user, "")
+	in, err := env.Instances.Create(context.Background(), name)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -3,14 +3,16 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    image: arara-agent-gateway:local
-    env_file: .env
+    image: ${APP_NAME:-arara-agent-gateway}-${ENVIRONMENT:-local}
+    hostname: ${APP_NAME:-arara-agent-gateway}-${ENVIRONMENT:-local}
+    env_file:
+      - .env
     environment:
       DATA_DIR: /data
-      PORT: "3000"
+      PORT: "${PORT:-3000}"
       DOCKER_SOCKET: /var/run/docker.sock
     ports:
-      - "127.0.0.1:${GATEWAY_PORT:-3000}:3000"
+      - "127.0.0.1:${GATEWAY_PORT:-3000}:${PORT:-3000}"
     volumes:
       - gateway-data:/data
       - /var/run/docker.sock:/var/run/docker.sock

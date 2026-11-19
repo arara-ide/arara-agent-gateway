@@ -118,9 +118,18 @@ func setup(t *testing.T) (*github.Service, *fakeGitHub, *testutil.Env) {
 	return gh, f, env
 }
 
-func authorize(t *testing.T, gh *github.Service, f *fakeGitHub, user, code string) string {
+func makeInst(t *testing.T, env *testutil.Env, name string) string {
 	t.Helper()
-	raw, _, err := gh.Connect(context.Background(), user)
+	in, err := env.Instances.Create(context.Background(), name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return in.ID
+}
+
+func authorize(t *testing.T, gh *github.Service, f *fakeGitHub, instanceID, code string) string {
+	t.Helper()
+	raw, _, err := gh.Connect(context.Background(), instanceID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -137,76 +146,83 @@ func authorize(t *testing.T, gh *github.Service, f *fakeGitHub, user, code strin
 
 func TestConnectFlowStoresEncryptedToken(t *testing.T) {
 	gh, f, env := setup(t)
-	state := authorize(t, gh, f, "user-1", "abc")
-	c, err := gh.Complete(context.Background(), "user-1", "abc", state)
+	id := makeInst(t, env, "one")
+	state := authorize(t, gh, f, id, "abc")
+	c, err := gh.Complete(context.Background(), id, "abc", state)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if c.Status != store.ConnConnected || c.Account != "octo" {
 		t.Fatalf("connection %+v", c)
 	}
-	stored, _ := env.Store.GetConnection(context.Background(), "user-1", github.Provider)
+	stored, _ := env.Store.GetConnection(context.Background(), id, github.Provider)
 	if strings.Contains(stored.Secret, "gho_abc") || !strings.HasPrefix(stored.Secret, "v1:") {
 		t.Fatal("token not encrypted at rest")
 	}
-	if _, err := gh.Complete(context.Background(), "user-1", "abc", state); !errors.Is(err, github.ErrInvalidState) {
+	if _, err := gh.Complete(context.Background(), id, "abc", state); !errors.Is(err, github.ErrInvalidState) {
 		t.Fatal("state reused")
 	}
 }
 
-func TestStateBoundToUser(t *testing.T) {
+func TestStateBoundToInstance(t *testing.T) {
 	gh, f, env := setup(t)
-	state := authorize(t, gh, f, "attacker", "evil")
-	if _, err := gh.Complete(context.Background(), "victim", "evil", state); !errors.Is(err, github.ErrInvalidState) {
-		t.Fatalf("cross-user completion accepted: %v", err)
+	a := makeInst(t, env, "a")
+	b := makeInst(t, env, "b")
+	state := authorize(t, gh, f, a, "evil")
+	if _, err := gh.Complete(context.Background(), b, "evil", state); !errors.Is(err, github.ErrInvalidState) {
+		t.Fatalf("cross-instance completion accepted: %v", err)
 	}
-	if _, err := env.Store.GetConnection(context.Background(), "victim", github.Provider); !errors.Is(err, store.ErrNotFound) {
-		t.Fatal("victim got a connection")
+	if _, err := env.Store.GetConnection(context.Background(), b, github.Provider); !errors.Is(err, store.ErrNotFound) {
+		t.Fatal("other instance got a connection")
 	}
 }
 
 func TestStateExpires(t *testing.T) {
 	gh, f, env := setup(t)
-	state := authorize(t, gh, f, "user-1", "abc")
+	id := makeInst(t, env, "one")
+	state := authorize(t, gh, f, id, "abc")
 	env.Clock.Advance(11 * time.Minute)
-	if _, err := gh.Complete(context.Background(), "user-1", "abc", state); !errors.Is(err, github.ErrInvalidState) {
+	if _, err := gh.Complete(context.Background(), id, "abc", state); !errors.Is(err, github.ErrInvalidState) {
 		t.Fatal("expired state accepted")
 	}
 }
 
-func TestReposAndCrossUserIsolation(t *testing.T) {
-	gh, f, _ := setup(t)
-	state := authorize(t, gh, f, "user-1", "abc")
-	if _, err := gh.Complete(context.Background(), "user-1", "abc", state); err != nil {
+func TestReposAndCrossInstanceIsolation(t *testing.T) {
+	gh, f, env := setup(t)
+	a := makeInst(t, env, "a")
+	b := makeInst(t, env, "b")
+	state := authorize(t, gh, f, a, "abc")
+	if _, err := gh.Complete(context.Background(), a, "abc", state); err != nil {
 		t.Fatal(err)
 	}
-	repos, more, err := gh.Repos(context.Background(), "user-1", 1)
+	repos, more, err := gh.Repos(context.Background(), a, 1)
 	if err != nil || len(repos) != 1 || repos[0].FullName != "octo/app" || !repos[0].CanPush || !more {
 		t.Fatalf("repos %+v %v %v", repos, more, err)
 	}
-	if _, _, err := gh.Repos(context.Background(), "user-2", 1); !errors.Is(err, github.ErrNotConnected) {
-		t.Fatalf("user-2 accessed user-1 repos: %v", err)
+	if _, _, err := gh.Repos(context.Background(), b, 1); !errors.Is(err, github.ErrNotConnected) {
+		t.Fatalf("instance b accessed instance a repos: %v", err)
 	}
-	if _, _, err := gh.Repo(context.Background(), "user-1", "other/app"); !errors.Is(err, github.ErrRepoForbidden) {
+	if _, _, err := gh.Repo(context.Background(), a, "other/app"); !errors.Is(err, github.ErrRepoForbidden) {
 		t.Fatalf("expected forbidden, got %v", err)
 	}
 }
 
 func TestRevokedTokenIsDetected(t *testing.T) {
 	gh, f, env := setup(t)
-	state := authorize(t, gh, f, "user-1", "abc")
-	gh.Complete(context.Background(), "user-1", "abc", state)
+	id := makeInst(t, env, "one")
+	state := authorize(t, gh, f, id, "abc")
+	gh.Complete(context.Background(), id, "abc", state)
 	f.mu.Lock()
 	delete(f.tokens, "gho_abc")
 	f.mu.Unlock()
-	if _, _, err := gh.Repos(context.Background(), "user-1", 1); !errors.Is(err, github.ErrExpired) {
+	if _, _, err := gh.Repos(context.Background(), id, 1); !errors.Is(err, github.ErrExpired) {
 		t.Fatalf("expected expired, got %v", err)
 	}
-	c, _ := env.Store.GetConnection(context.Background(), "user-1", github.Provider)
+	c, _ := env.Store.GetConnection(context.Background(), id, github.Provider)
 	if c.Status != store.ConnExpired {
 		t.Fatalf("status %s", c.Status)
 	}
-	st, _ := gh.Status(context.Background(), "user-1")
+	st, _ := gh.Status(context.Background(), id)
 	if st.Status != store.ConnExpired {
 		t.Fatalf("status endpoint %s", st.Status)
 	}
@@ -214,11 +230,12 @@ func TestRevokedTokenIsDetected(t *testing.T) {
 
 func TestRefreshExpiringToken(t *testing.T) {
 	gh, f, env := setup(t)
+	id := makeInst(t, env, "one")
 	f.expiresIn = 600
-	state := authorize(t, gh, f, "user-1", "abc")
-	gh.Complete(context.Background(), "user-1", "abc", state)
+	state := authorize(t, gh, f, id, "abc")
+	gh.Complete(context.Background(), id, "abc", state)
 	env.Clock.Advance(8 * time.Minute)
-	tok, err := gh.Token(context.Background(), "user-1")
+	tok, err := gh.Token(context.Background(), id)
 	if err != nil || tok.AccessToken != "gho_refreshed" || f.refreshes != 1 {
 		t.Fatalf("refresh: %v %v %d", tok.AccessToken, err, f.refreshes)
 	}
@@ -226,20 +243,21 @@ func TestRefreshExpiringToken(t *testing.T) {
 
 func TestDisconnectRevokesAndForgets(t *testing.T) {
 	gh, f, env := setup(t)
-	state := authorize(t, gh, f, "user-1", "abc")
-	gh.Complete(context.Background(), "user-1", "abc", state)
-	c, err := gh.Disconnect(context.Background(), "user-1")
+	id := makeInst(t, env, "one")
+	state := authorize(t, gh, f, id, "abc")
+	gh.Complete(context.Background(), id, "abc", state)
+	c, err := gh.Disconnect(context.Background(), id)
 	if err != nil || c.Status != store.ConnDisconnected {
 		t.Fatalf("disconnect %v", err)
 	}
 	if len(f.revoked) != 1 || f.revoked[0] != "gho_abc" {
 		t.Fatalf("revoked %v", f.revoked)
 	}
-	stored, _ := env.Store.GetConnection(context.Background(), "user-1", github.Provider)
+	stored, _ := env.Store.GetConnection(context.Background(), id, github.Provider)
 	if stored.Secret != "" {
 		t.Fatal("secret kept after disconnect")
 	}
-	if _, err := gh.Token(context.Background(), "user-1"); !errors.Is(err, github.ErrNotConnected) {
+	if _, err := gh.Token(context.Background(), id); !errors.Is(err, github.ErrNotConnected) {
 		t.Fatal("token still usable")
 	}
 }
@@ -259,8 +277,9 @@ func TestParseFullName(t *testing.T) {
 
 func TestDisabled(t *testing.T) {
 	env := testutil.NewEnv(t, 10)
+	id := makeInst(t, env, "one")
 	gh := github.New(github.Config{}, env.Store, env.Box, nil, env.Clock.Now)
-	if _, _, err := gh.Connect(context.Background(), "u"); !errors.Is(err, github.ErrDisabled) {
+	if _, _, err := gh.Connect(context.Background(), id); !errors.Is(err, github.ErrDisabled) {
 		t.Fatal("expected disabled")
 	}
 }
