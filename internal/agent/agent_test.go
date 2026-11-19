@@ -145,6 +145,12 @@ func TestStatusParsing(t *testing.T) {
 	if ok, _ := (Codex{}).ParseStatus(1, "Not logged in\n"); ok {
 		t.Fatal("codex logged out parsed as logged in")
 	}
+	if ok, acc := (Antigravity{}).ParseStatus(0, "Fetching available models...\n{\"conversation_id\":\"\",\"status\":\"SUCCESS\",\"response\":\"gemini-4-neon-high\\tGemini 4 Neon\"}\n"); !ok || acc != "Google" {
+		t.Fatalf("antigravity status %v %s", ok, acc)
+	}
+	if ok, _ := (Antigravity{}).ParseStatus(1, "Error: Please sign in"); ok {
+		t.Fatal("antigravity logged out parsed as logged in")
+	}
 }
 
 func TestLoginOutputExtraction(t *testing.T) {
@@ -158,6 +164,10 @@ func TestLoginOutputExtraction(t *testing.T) {
 	}
 	if c := FindDeviceCode(codexOut); c != "ABCD-12EFG" {
 		t.Fatalf("codex code %q", c)
+	}
+	agyOut := "Open the URL below in your browser:\nhttps://accounts.google.com/o/oauth2/auth?access_type=offline&client_id=123&redirect_uri=https%3A%2F%2Fantigravity.google%2Foauth-callback&response_type=code&state=abc\nAfter authenticating, copy the code displayed in the browser and paste it below:\n"
+	if u := FindURL(agyOut, "oauth", "accounts.google.com"); u != "https://accounts.google.com/o/oauth2/auth?access_type=offline&client_id=123&redirect_uri=https%3A%2F%2Fantigravity.google%2Foauth-callback&response_type=code&state=abc" {
+		t.Fatalf("antigravity url %q", u)
 	}
 }
 

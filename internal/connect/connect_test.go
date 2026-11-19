@@ -16,9 +16,10 @@ import (
 )
 
 type loginCLI struct {
-	mu       sync.Mutex
-	loggedIn bool
-	gotCode  string
+	mu          sync.Mutex
+	loggedIn    bool
+	agyLoggedIn bool
+	gotCode     string
 }
 
 func (c *loginCLI) handler(e *fakedocker.Exec) int {
@@ -43,6 +44,42 @@ func (c *loginCLI) handler(e *fakedocker.Exec) int {
 	case cmd[0] == "codex":
 		fmt.Fprintln(e.Stdout, "Not logged in")
 		return 1
+	case cmd[0] == "agy" && len(cmd) > 1 && cmd[len(cmd)-1] == "models":
+		c.mu.Lock()
+		ok := c.agyLoggedIn
+		c.mu.Unlock()
+		if ok {
+			fmt.Fprintln(e.Stdout, `{"conversation_id":"","status":"SUCCESS","response":"gemini-4-neon-high\tGemini 4 Neon"}`)
+			return 0
+		}
+		fmt.Fprintln(e.Stderr, "Error: Please sign in to view available models.")
+		return 1
+	case cmd[0] == "agy" && len(cmd) > 1 && cmd[len(cmd)-1] == "/logout":
+		c.mu.Lock()
+		c.agyLoggedIn = false
+		c.mu.Unlock()
+		fmt.Fprintln(e.Stdout, "Successfully logged out.")
+		<-e.Killed
+		return 0
+	case cmd[0] == "agy":
+		fmt.Fprint(e.Stdout, "Welcome to the Antigravity CLI.\r\nSelect login method:\r\n> 1. Google OAuth\r\n")
+		rd := bufio.NewReader(e.Stdin)
+		_, _ = rd.ReadString('\r')
+		fmt.Fprint(e.Stdout, "Open the URL below in your browser:\r\nhttps://accounts.google.com/o/oauth2/auth?client_id=123&redirect_uri=https%3A%2F%2Fantigravity.google%2Foauth-callback&response_type=code&state=s1\r\nAfter authenticating, copy the code displayed in the browser and paste it below:\r\n")
+		line, _ := rd.ReadString('\r')
+		c.mu.Lock()
+		c.gotCode = line
+		if line == "google-ok-code\r" {
+			c.agyLoggedIn = true
+			c.mu.Unlock()
+			fmt.Fprintln(e.Stdout, "Successfully signed in!")
+			<-e.Killed
+			return 0
+		}
+		c.mu.Unlock()
+		fmt.Fprintln(e.Stdout, `Got an error: token exchange failed: oauth2: "invalid_grant"`)
+		<-e.Killed
+		return 0
 	}
 	return 0
 }
@@ -52,7 +89,7 @@ func setup(t *testing.T) (*connect.Service, *testutil.Env, *loginCLI, store.Inst
 	cli := &loginCLI{}
 	env.Engine.SetHandler(cli.handler)
 	svc := connect.New(env.Store, env.Box, env.Instances, env.Engine, env.Clock.Now, testutil.Logger())
-	return svc, env, cli, env.Running(t, "user-1")
+	return svc, env, cli, env.Running(t, "inst-1")
 }
 
 func waitStatus(t *testing.T, svc *connect.Service, in store.Instance, agent string, want connect.LoginStatus) connect.Login {
@@ -66,7 +103,7 @@ func waitStatus(t *testing.T, svc *connect.Service, in store.Instance, agent str
 		time.Sleep(10 * time.Millisecond)
 	}
 	l, _ := svc.GetLogin(in.ID, agent)
-	t.Fatalf("login status %s, want %s", l.Status, want)
+	t.Fatalf("login status %s, want %s (err=%s)", l.Status, want, l.Error)
 	return l
 }
 
@@ -95,7 +132,7 @@ func TestClaudeAccountLogin(t *testing.T) {
 	if got != "secret-code\r" {
 		t.Fatalf("cli received %q", got)
 	}
-	c := svc.Connection(context.Background(), in.UserID, "claude")
+	c := svc.Connection(context.Background(), in.ID, "claude")
 	if c.Status != store.ConnConnected || c.Account != "dev@example.com" || c.Method != "account" {
 		t.Fatalf("connection %+v", c)
 	}
@@ -130,12 +167,45 @@ func TestCodexDeviceLoginCancel(t *testing.T) {
 	waitStatus(t, svc, in, "codex", connect.LoginCancelled)
 }
 
-func TestAntigravityHasNoAccountLogin(t *testing.T) {
-	svc, _, _, in := setup(t)
-	if _, err := svc.StartLogin(context.Background(), in, "antigravity"); !errors.Is(err, connect.ErrMethodUnsupported) {
-		t.Fatalf("got %v", err)
+func TestAntigravityAccountLoginAndLogout(t *testing.T) {
+	svc, env, _, in := setup(t)
+	l, err := svc.StartLogin(context.Background(), in, "antigravity")
+	if err != nil {
+		t.Fatal(err)
 	}
-	if _, err := svc.SetAPIKey(context.Background(), in.UserID, "unknown", "key12345678"); !errors.Is(err, connect.ErrUnknownAgent) {
+	if l.Status != connect.LoginWaiting || !l.NeedsInput || l.URL != "https://accounts.google.com/o/oauth2/auth?client_id=123&redirect_uri=https%3A%2F%2Fantigravity.google%2Foauth-callback&response_type=code&state=s1" {
+		t.Fatalf("login %+v", l)
+	}
+	if _, err := svc.SendLoginInput(in.ID, "antigravity", "google-ok-code"); err != nil {
+		t.Fatal(err)
+	}
+	waitStatus(t, svc, in, "antigravity", connect.LoginSucceeded)
+	c := svc.Connection(context.Background(), in.ID, "antigravity")
+	if c.Status != store.ConnConnected || c.Account != "Google" || c.Method != "account" {
+		t.Fatalf("connection %+v", c)
+	}
+	out, err := svc.Logout(context.Background(), in, "antigravity")
+	if err != nil || out.Status != store.ConnDisconnected {
+		t.Fatalf("logout %+v %v", out, err)
+	}
+	if env.Instances.Busy(in.ID) != 0 {
+		t.Fatal("logout left instance busy")
+	}
+}
+
+func TestAntigravityLoginFailureAndUnknownAgent(t *testing.T) {
+	svc, _, _, in := setup(t)
+	if _, err := svc.StartLogin(context.Background(), in, "antigravity"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.SendLoginInput(in.ID, "antigravity", "wrong-code"); err != nil {
+		t.Fatal(err)
+	}
+	l := waitStatus(t, svc, in, "antigravity", connect.LoginFailed)
+	if l.Error != "login_failed" {
+		t.Fatalf("error %q", l.Error)
+	}
+	if _, err := svc.SetAPIKey(context.Background(), in.ID, "unknown", "key12345678"); !errors.Is(err, connect.ErrUnknownAgent) {
 		t.Fatal("unknown agent accepted")
 	}
 }
@@ -143,7 +213,7 @@ func TestAntigravityHasNoAccountLogin(t *testing.T) {
 func TestLoginRequiresRunningInstance(t *testing.T) {
 	env := testutil.NewEnv(t, 10)
 	svc := connect.New(env.Store, env.Box, env.Instances, env.Engine, env.Clock.Now, testutil.Logger())
-	in, _, _ := env.Instances.Create(context.Background(), "user-1", "")
+	in, _ := env.Instances.Create(context.Background(), "one")
 	if _, err := svc.StartLogin(context.Background(), in, "claude"); err == nil {
 		t.Fatal("login on stopped instance")
 	}

@@ -5,14 +5,14 @@ Instruções para qualquer agente de IA (e pessoa) que altere este repositório.
 ## 1. Identidade
 
 - Nome: **Arara Agent Gateway**. Repositório público `arara-ide/arara-agent-gateway`, licença MIT.
-- O que é: uma "Evolution API para agentes de programação". Um servidor central gerencia instâncias independentes; cada instância é um container Docker com Claude Code, Codex e Antigravity disponíveis, um volume persistente próprio e conexões próprias.
-- Consumidor principal: backend do AC-WEB (PWA e Desktop usam o mesmo contrato). O gateway é independente e pode servir outros projetos.
+- O que é: uma "Evolution API para agentes de programação". Um servidor central gerencia N instâncias independentes sob uma única `API_KEY` global; cada instância é um container Docker com Claude Code, Codex e Antigravity disponíveis, um volume persistente próprio e conexões próprias.
+- Consumidor principal: backend do AC-WEB (`ac-services`), que organiza qual instância pertence a qual usuário. O gateway é independente e pode servir outros projetos.
 
 ## 2. Objetivos e escopo
 
 - Gerenciar instâncias sob demanda (criar, ligar, desligar, excluir), executar prompts nos três CLIs com streaming, guardar histórico curto (20 execuções por instância) e desligar instâncias ociosas.
-- Manter conexões por usuário: GitHub (OAuth/GitHub App user token) e credenciais dos CLIs.
-- Fora do escopo: cadastro/login de usuários finais, interface de chat para clientes, colaboração automática entre agentes, workflows, filas, cobrança, analytics. Não implemente recurso que não foi pedido.
+- Manter conexões por instância: GitHub (OAuth/GitHub App user token) e credenciais dos CLIs (login de conta e chave de API).
+- Fora do escopo: cadastro/login/mapeamento de usuários finais, interface de chat para clientes, colaboração automática entre agentes, workflows, filas, cobrança, analytics. Não implemente recurso que não foi pedido.
 
 ## 3. Arquitetura
 
@@ -30,10 +30,9 @@ Gateway → SQLite (DATA_DIR/gateway.db)
 
 ## 4. Integração com AC-WEB e responsabilidades
 
-- Gateway: instâncias, execução dos CLIs, isolamento, persistência, GitHub, credenciais, limites, streaming, API e dashboard admin.
-- AC-WEB: login dos usuários finais, chat, PWA/Desktop, contas, permissões.
-- A `API_KEY` administrativa e a `INTEGRATION_API_KEY` só existem em servidores. Nunca no navegador, no app Desktop, em `localStorage` ou em URL.
-- O backend AC-WEB envia `X-User-Id` com o ID do usuário tirado da sessão dele, nunca de um campo enviado pelo cliente. Com esse cabeçalho, o gateway restringe toda operação aos recursos daquele usuário. A `INTEGRATION_API_KEY` exige o cabeçalho.
+- Gateway: instâncias, execução dos CLIs, isolamento, persistência, GitHub por instância, credenciais, limites, streaming, API e dashboard admin.
+- AC-WEB (`ac-services` + `ac-web`): login dos usuários finais, associação usuário ↔ instância, permissões, chat, PWA/Desktop.
+- A `API_KEY` só existe em servidores. Nunca no navegador, no app Desktop, em `localStorage` ou em URL.
 - Contrato completo em `docs/ac-web-integration.md` e `docs/openapi.yaml`. Mudou rota, campo ou erro: atualize os dois na mesma entrega.
 
 ## 5. Desempenho
@@ -45,12 +44,11 @@ Gateway → SQLite (DATA_DIR/gateway.db)
 
 ## 6. Segurança
 
-- Comparação de chaves em tempo constante. Sem chave válida: `401`. Recurso de outro usuário: `404` (não revela existência).
-- Segredos persistidos (tokens GitHub, API keys dos provedores) são cifrados com AES-256-GCM usando `CREDENTIALS_ENCRYPTION_KEY`, com o ID do dono como dado associado. Nunca são devolvidos pela API nem exibidos na dashboard.
+- Comparação da `API_KEY` em tempo constante. Sem chave válida: `401`.
+- Segredos persistidos (tokens GitHub, API keys dos provedores) são cifrados com AES-256-GCM usando `CREDENTIALS_ENCRYPTION_KEY`, com o `instance_id` como dado associado. Nunca são devolvidos pela API nem exibidos na dashboard.
 - Tokens GitHub nunca são gravados no volume da instância; o gateway injeta um cabeçalho HTTP temporário em cada `git clone/fetch/push`.
 - Logins de conta dos CLIs ficam nos arquivos oficiais dos próprios CLIs, dentro do volume da instância. Documente qualquer mudança desse modelo.
 - Entrada do usuário nunca é interpolada em shell: comandos vão para o Docker como lista de argumentos.
-- Containers não equivalem a VMs. Para produção multiusuário, recomende runtime `runsc` (gVisor) via `CONTAINER_RUNTIME` e uma máquina dedicada.
 - Não publique `.env`, bancos, volumes, sessões, tokens ou arquivos de credencial. Não registre prompts, respostas ou tokens em log.
 
 ## 7. Padrões de código
@@ -86,7 +84,7 @@ assets.go             embute web/ e docs/openapi.yaml no binário
 ## 9. API
 
 - Prefixo `/api`. JSON em tudo, exceto o stream (`text/event-stream`).
-- Autenticação: cabeçalho `apikey`. Escopo de usuário: cabeçalho `X-User-Id`.
+- Autenticação: cabeçalho `apikey`.
 - Erro padrão: `{"error":{"code":"snake_case","message":"English text"}}` com status HTTP coerente. Códigos são estáveis; clientes traduzem.
 - IDs com prefixo: `inst_`, `run_`, `login_`. Datas em RFC 3339 UTC.
 - Ciclo de vida idempotente: `start` em instância ligada e `stop` em instância parada retornam `200` com o estado atual.
@@ -95,7 +93,7 @@ assets.go             embute web/ e docs/openapi.yaml no binário
 
 - SQLite em `DATA_DIR/gateway.db`, modo WAL, uma conexão de escrita. Migrações em `internal/store/schema.go`, só aditivas.
 - Ao iniciar, o gateway reconcilia: execuções `running` sem processo viram `interrupted`, o estado dos containers é lido do Docker e processos órfãos dentro de containers ligados são encerrados.
-- Excluir instância exige `confirm` igual ao ID e remove container, volume, execuções e estado da instância. Conexões do usuário continuam, salvo pedido explícito.
+- Excluir instância exige `confirm` igual ao ID e remove container, volume, conexões, execuções e estado da instância.
 
 ## 11. Git e branches
 
@@ -116,5 +114,5 @@ assets.go             embute web/ e docs/openapi.yaml no binário
 1. Testes acima passando, com evidência no PR.
 2. `docs/openapi.yaml`, `docs/ac-web-integration.md` e `README.md` atualizados quando o contrato muda.
 3. Nenhum segredo, sessão ou volume no diff.
-4. Nenhum acesso entre usuários: teste cobrindo o caso quando a rota for nova.
+4. Isolamento entre instâncias coberto por teste quando a rota ou serviço for novo.
 5. Nenhuma dependência ou serviço novo sem justificativa.

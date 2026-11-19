@@ -1,6 +1,6 @@
 # Arara Agent Gateway
 
-Servidor open source que gerencia instâncias isoladas de agentes de programação (Claude Code, Codex e Google Antigravity) numa única máquina Linux. Funciona como uma "Evolution API para agentes": um servidor central, uma instância por usuário, API com chave e uma dashboard administrativa.
+Servidor open source que gerencia instâncias isoladas de agentes de programação (Claude Code, Codex e Google Antigravity) numa única máquina Linux. Funciona no modelo da Evolution API: um servidor central, uma chave global (`apikey`), N instâncias independentes com conexões próprias e uma dashboard administrativa.
 
 ```bash
 cp .env.example .env   # preencha API_KEY e CREDENTIALS_ENCRYPTION_KEY
@@ -11,43 +11,44 @@ Abra `http://localhost:3000` e entre com a `API_KEY`.
 
 ## Por que existe
 
-O AC-WEB (PWA e Desktop) precisa oferecer agentes de programação que rodam na nuvem, com o login de cada usuário e sem manter uma máquina por pessoa. O gateway resolve só a parte de execução: liga um container quando o usuário pede, roda o CLI escolhido, transmite a resposta e desliga o container quando ninguém usa. Ele é independente e pode servir qualquer outro backend.
+O AC-WEB (PWA e Desktop) precisa oferecer agentes de programação que rodam na nuvem, com isolamento entre sessões e sem manter uma máquina por usuário. O gateway resolve só a execução: cria e gerencia instâncias sob demanda, liga o container quando necessário, roda o CLI escolhido com streaming e desliga o container quando fica ocioso. Quem decide qual instância pertence a qual usuário é o backend integrador (por exemplo, o `ac-services`).
 
-## Semelhanças com a Evolution API
+## Modelo Evolution API
 
-- Um servidor central gerencia muitas instâncias independentes.
-- Autenticação pelo cabeçalho `apikey`, com a chave definida no `.env`.
+- Um servidor central gerencia quantas instâncias independentes o operador precisar.
+- Autenticação única pelo cabeçalho `apikey`, com a chave definida no `.env`.
+- Cada instância é autocontida: container, volume persistente, conexões dos três agentes, conexão GitHub, repositórios clonados e histórico.
 - API REST documentada (`docs/openapi.yaml`) como contrato principal.
-- Dashboard administrativa separada, que usa a mesma API.
-- A sessão de cada instância fica persistida: lá o WhatsApp, aqui os logins dos CLIs. O login por URL e código faz o papel do QR code.
+- Dashboard administrativa separada, que consome a mesma API.
+- O login por URL e código faz o papel do QR code da Evolution API.
 
-Diferenças: cada instância é um container que executa código, então o isolamento é obrigatório e as instâncias desligam por inatividade. Não há webhooks: o progresso chega por SSE.
+Diferenças: cada instância é um container que executa código, então o isolamento é obrigatório e as instâncias desligam por inatividade. O progresso chega por SSE em vez de webhooks.
 
 ## Diferenças em relação ao Cezar
 
 O [Cezar](https://github.com/open-mercato/cezar) é um cockpit completo para um desenvolvedor, com workflows, filas, variantes, automações, Jira/Linear e custos, escrito em Node. O gateway usa o mesmo jeito de dirigir os CLIs, mas é muito menor:
 
 - Go e SQLite num binário de cerca de 20 MB de RAM.
-- Multiusuário, com um container por usuário.
+- Múltiplas instâncias isoladas numa única máquina.
 - Só instâncias, execuções, histórico curto, conexões e GitHub.
-- Nenhuma interface para o usuário final: isso é papel do AC-WEB.
+- Nenhuma interface para o usuário final: isso é papel do backend e do frontend que consomem o gateway.
 
 ## Arquitetura
 
 ```text
 AC-WEB PWA / Desktop
         │ (sessão do AC-WEB)
-   backend AC-WEB ── HTTPS + apikey + X-User-Id ──▶ Arara Agent Gateway (Go)
-                                                     ├─ API REST + SSE
-                                                     ├─ dashboard (embutida)
-                                                     ├─ instâncias / inatividade
-                                                     ├─ GitHub
-                                                     └─ SQLite (DATA_DIR/gateway.db)
-                                                            │ socket do Docker
-                                   ┌────────────────────────┼────────────────────────┐
-                              container A              container B              container C
-                         claude · codex · agy     claude · codex · agy     claude · codex · agy
-                            volume aag-<id>          volume aag-<id>          volume aag-<id>
+   backend AC-WEB ────── HTTPS + apikey ──────▶ Arara Agent Gateway (Go)
+   (mapeia usuário ↔ instância)                   ├─ API REST + SSE
+                                                  ├─ dashboard (embutida)
+                                                  ├─ instâncias / inatividade
+                                                  ├─ GitHub (por instância)
+                                                  └─ SQLite (DATA_DIR/gateway.db)
+                                                         │ socket do Docker
+                                ┌────────────────────────┼────────────────────────┐
+                           container A              container B              container C
+                      claude · codex · agy     claude · codex · agy     claude · codex · agy
+                         volume aag-<id>          volume aag-<id>          volume aag-<id>
 ```
 
 - Uma imagem de runtime compartilhada (`runtime/Dockerfile`) traz os três CLIs.
@@ -72,7 +73,6 @@ Edite o `.env`:
 ```bash
 API_KEY=$(openssl rand -hex 32)
 CREDENTIALS_ENCRYPTION_KEY=$(openssl rand -hex 32)
-INTEGRATION_API_KEY=$(openssl rand -hex 32)
 DOCKER_GID=$(stat -c %g /var/run/docker.sock)
 ```
 
@@ -80,15 +80,23 @@ O gateway não inicia sem `API_KEY` (32+ caracteres) e `CREDENTIALS_ENCRYPTION_K
 
 ### Deploy com Docker Compose
 
+Local:
+
 ```bash
 docker compose up -d --build
 docker compose logs -f gateway
 ```
 
+Atrás de um proxy reverso Traefik numa rede Docker externa (por exemplo `microservices_network`):
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.proxy.yml up -d --build
+```
+
 O Compose:
 - constrói a imagem de runtime (`arara-agent-runtime:local`, cerca de 2 GB);
 - sobe o gateway como usuário sem privilégio, com rootfs somente leitura;
-- publica a porta só em `127.0.0.1`. Coloque um proxy reverso com HTTPS na frente.
+- no modo local, publica a porta só em `127.0.0.1`; no modo proxy (`docker-compose.proxy.yml`), remove a porta do host e expõe o serviço via labels Traefik.
 
 ### Sem Docker Compose
 
@@ -105,8 +113,7 @@ Todas as variáveis estão em [`.env.example`](.env.example). As principais:
 
 | Variável | Padrão | Para quê |
 |---|---|---|
-| `API_KEY` | — | Chave administrativa (dashboard e acesso total) |
-| `INTEGRATION_API_KEY` | vazio | Chave do backend AC-WEB. Exige `X-User-Id` em toda chamada. |
+| `API_KEY` | — | Chave global de acesso (dashboard e backend integrador) |
 | `CREDENTIALS_ENCRYPTION_KEY` | — | Cifra de tokens GitHub e chaves de API |
 | `IDLE_TIMEOUT_SECONDS` | `300` | Tempo sem atividade até desligar |
 | `IDLE_CHECK_INTERVAL_SECONDS` | `15` | Frequência da verificação |
@@ -119,7 +126,7 @@ Todas as variáveis estão em [`.env.example`](.env.example). As principais:
 | `SESSION_RETENTION_DAYS` | `30` | Retenção dos arquivos de sessão dos CLIs |
 | `GITHUB_CLIENT_ID` / `GITHUB_CLIENT_SECRET` / `GITHUB_REDIRECT_URL` | vazio | Integração GitHub, opcional |
 
-## Autenticação administrativa
+## Autenticação
 
 Toda chamada (exceto `GET /api/health` e `GET /api/openapi.yaml`) precisa do cabeçalho `apikey`:
 
@@ -128,46 +135,45 @@ curl -H "apikey: $API_KEY" http://localhost:3000/api/instances
 ```
 
 - A dashboard pede a chave na abertura e a mantém só na memória da aba.
-- Não existe cadastro nem senha de usuários no gateway: quem autentica os usuários finais é o AC-WEB.
-- Com `X-User-Id`, qualquer chave passa a enxergar só os recursos daquele usuário. A `INTEGRATION_API_KEY` sempre exige esse cabeçalho.
-- Nunca envie nenhuma das chaves ao navegador ou ao app Desktop.
+- Não existe cadastro nem controle de usuários finais no gateway: quem gerencia usuários e associa cada usuário à sua instância é o backend integrador.
+- Nunca envie a `API_KEY` ao navegador ou ao app Desktop.
 
 ## Instâncias
 
 ```bash
-H=(-H "apikey: $INTEGRATION_API_KEY" -H "X-User-Id: acweb_user_123" -H "Content-Type: application/json")
+H=(-H "apikey: $API_KEY" -H "Content-Type: application/json")
 
-curl -s "${H[@]}" -X POST http://localhost:3000/api/instances -d '{"name":"Principal"}'
-ID=$(curl -s "${H[@]}" http://localhost:3000/api/users/acweb_user_123/instance | jq -r .instance.id)
+ID=$(curl -s "${H[@]}" -X POST http://localhost:3000/api/instances -d '{"name":"Principal"}' | jq -r .instance.id)
 
+curl -s "${H[@]}" http://localhost:3000/api/instances
 curl -s "${H[@]}" -X POST http://localhost:3000/api/instances/$ID/start
 curl -s "${H[@]}" http://localhost:3000/api/instances/$ID/status
 curl -s "${H[@]}" -X POST http://localhost:3000/api/instances/$ID/stop
 curl -s "${H[@]}" -X DELETE "http://localhost:3000/api/instances/$ID?confirm=$ID"
 ```
 
-- Criar é idempotente e não liga container.
-- `start` e `stop` também são idempotentes.
-- Excluir exige `confirm` igual ao ID e apaga container, volume e histórico.
+- `POST /api/instances` sempre cria uma nova instância (sem limite de 1 por usuário) e não liga container.
+- `start` e `stop` são idempotentes.
+- Excluir exige `confirm` igual ao ID e apaga container, volume, conexões e histórico da instância.
 
-## Conexão GitHub por usuário
+## Conexão GitHub por instância
 
 Registre um GitHub App (recomendado) ou um OAuth App:
 - **GitHub App**: permissões `Contents: Read and write` e `Metadata: Read-only`, com token de usuário expirável.
 - **OAuth App**: escopo `repo`.
 
-Em `GITHUB_REDIRECT_URL`, coloque uma página do AC-WEB. Ela recebe `code` e `state` e repassa para o gateway com o usuário da sessão.
+Em `GITHUB_REDIRECT_URL`, coloque uma página do backend integrador. Ela recebe `code` e `state` e repassa para o gateway na instância correspondente.
 
 ```bash
-curl -s "${H[@]}" -X POST http://localhost:3000/api/users/acweb_user_123/github/connect
-curl -s "${H[@]}" -X POST http://localhost:3000/api/users/acweb_user_123/github/callback -d '{"code":"…","state":"…"}'
-curl -s "${H[@]}" http://localhost:3000/api/users/acweb_user_123/github/repos
+curl -s "${H[@]}" -X POST http://localhost:3000/api/instances/$ID/github/connect
+curl -s "${H[@]}" -X POST http://localhost:3000/api/instances/$ID/github/callback -d '{"code":"…","state":"…"}'
+curl -s "${H[@]}" http://localhost:3000/api/instances/$ID/github/repos
 curl -s "${H[@]}" -X POST http://localhost:3000/api/instances/$ID/repos -d '{"full_name":"octo/app","select":true}'
 curl -s "${H[@]}" -X POST http://localhost:3000/api/instances/$ID/repos/octo/app/push -d '{"agent":"codex"}'
-curl -s "${H[@]}" -X DELETE http://localhost:3000/api/users/acweb_user_123/github
+curl -s "${H[@]}" -X DELETE http://localhost:3000/api/instances/$ID/github
 ```
 
-- O token fica cifrado no banco e nunca entra no container.
+- O token fica cifrado no banco, vinculado à instância, e nunca entra no container.
 - Cada agente trabalha no próprio worktree, na branch `arara/<agente>`.
 - O push só aceita branches `arara/*`.
 
@@ -177,19 +183,17 @@ curl -s "${H[@]}" -X DELETE http://localhost:3000/api/users/acweb_user_123/githu
 |---|---|---|
 | Claude Code | `claude auth login`: abre a URL e cola o código | `ANTHROPIC_API_KEY` |
 | Codex | `codex login --device-auth`: abre a URL e digita o código | `CODEX_API_KEY` |
-| Google Antigravity | Não suportado (veja abaixo) | `GEMINI_API_KEY` |
+| Google Antigravity | `agy` (Google OAuth): abre a URL e cola o código | `GEMINI_API_KEY` |
 
 ```bash
-curl -s "${H[@]}" -X PUT http://localhost:3000/api/users/acweb_user_123/agents/antigravity/api-key -d '{"api_key":"AIza…"}'
-curl -s "${H[@]}" -X POST http://localhost:3000/api/instances/$ID/agents/claude/login
-curl -s "${H[@]}" -X POST http://localhost:3000/api/instances/$ID/agents/claude/login/input -d '{"code":"…"}'
+curl -s "${H[@]}" -X PUT http://localhost:3000/api/instances/$ID/agents/antigravity/api-key -d '{"api_key":"AIza…"}'
+curl -s "${H[@]}" -X POST http://localhost:3000/api/instances/$ID/agents/antigravity/login
+curl -s "${H[@]}" -X POST http://localhost:3000/api/instances/$ID/agents/antigravity/login/input -d '{"code":"…"}'
 curl -s "${H[@]}" http://localhost:3000/api/instances/$ID/agents
 ```
 
-- O login usa o fluxo oficial do CLI. O usuário só vê a URL, o código e um campo de uma linha, nunca um terminal.
+- O login usa o fluxo oficial de cada CLI. O usuário só vê a URL, o código e um campo de uma linha, nunca um terminal.
 - Logins de conta ficam nos arquivos do próprio CLI, dentro do volume da instância. Chaves de API ficam cifradas no gateway e só entram na execução.
-- O Antigravity só aceita chave de API: o login Google dele exige keyring local, e os termos do Antigravity proíbem usar o OAuth dele por software de terceiros.
-- Para oferecer o login de conta do Claude ou do Codex a terceiros, confira antes os termos da Anthropic e da OpenAI. A chave de API do próprio usuário é o caminho claramente suportado para uso hospedado.
 
 ## Execução de prompts e streaming
 
@@ -230,16 +234,13 @@ Tudo sobrevive a desligamento manual ou automático, a reinício do container, d
   - limites de memória, CPU e PIDs;
   - rede própria sem comunicação entre containers;
   - sem socket do Docker.
-- **Containers não isolam como VMs.** Os agentes executam código arbitrário. Em produção multiusuário:
-  - use `CONTAINER_RUNTIME=runsc` (gVisor) numa máquina dedicada, sem bancos nem serviços de produção;
-  - bloqueie o acesso à rede do host na cadeia `DOCKER-USER`;
-  - cifre o disco do host.
+- Para endurecimento adicional em produção, pode-se usar `CONTAINER_RUNTIME=runsc` (gVisor) e regras na cadeia `DOCKER-USER` bloqueando acesso à rede do host.
 - O gateway acessa o socket do Docker, o que equivale a root no host. Exponha a API só por HTTPS ou rede privada.
 - Volumes locais não têm cota de disco: monitore o uso.
 
 ## Integração com o AC-WEB
 
-O contrato completo para o backend do AC-WEB (PWA e Desktop) está em [`docs/ac-web-integration.md`](docs/ac-web-integration.md). Ele cobre autenticação, associação de usuários, estados, erros, GitHub, login dos CLIs e repasse do streaming.
+O contrato completo para o backend do AC-WEB (PWA e Desktop) está em [`docs/ac-web-integration.md`](docs/ac-web-integration.md). Ele cobre autenticação, mapeamento de instâncias, estados, erros, GitHub, login dos CLIs e repasse do streaming.
 
 ## Desenvolvimento
 
@@ -250,7 +251,7 @@ go test -race ./...
 ./scripts/e2e-docker.sh
 ```
 
-- O `e2e-docker.sh` sobe o gateway com diretório, porta e rede temporários e testa contra o Docker real. Ele verifica isolamento, logins, execuções em paralelo, cancelamento, inatividade, reinício e exclusão, usando chaves inválidas, sem gastar créditos.
+- O `e2e-docker.sh` sobe o gateway com diretório, porta e rede temporários e testa contra o Docker real. Ele verifica isolamento, logins dos três CLIs, execuções em paralelo, cancelamento, inatividade, reinício e exclusão, usando chaves inválidas, sem gastar créditos.
 - `E2E_SKIP_PROVIDERS=1` pula as chamadas aos provedores, como no CI.
 - Regras para contribuir: [`AGENTS.md`](AGENTS.md).
 

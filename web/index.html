@@ -32,8 +32,6 @@
         <button type="button" id="refresh" class="ghost" data-i18n="action.refresh">Refresh</button>
       </div>
       <form id="create-form" class="row wrap card">
-        <label for="new-user" data-i18n="list.newUser">AC-WEB user ID</label>
-        <input id="new-user" name="user" required pattern="[A-Za-z0-9._:@\-]{1,128}" spellcheck="false">
         <label for="new-name" data-i18n="list.newName">Name (optional)</label>
         <input id="new-name" name="name" maxlength="80">
         <button type="submit" class="primary" data-i18n="list.create">Create instance</button>
@@ -45,7 +43,6 @@
           <thead>
             <tr>
               <th scope="col" data-i18n="col.instance">Instance</th>
-              <th scope="col" data-i18n="col.user">User</th>
               <th scope="col" data-i18n="col.state">Status</th>
               <th scope="col" data-i18n="col.created">Created</th>
               <th scope="col" data-i18n="col.activity">Last activity</th>

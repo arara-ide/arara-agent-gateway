@@ -14,10 +14,7 @@ import (
 
 const HistoryLimit = 20
 
-var (
-	ErrNotFound = errors.New("not found")
-	ErrConflict = errors.New("conflict")
-)
+var ErrNotFound = errors.New("not found")
 
 type InstanceState string
 
@@ -31,7 +28,6 @@ const (
 
 type Instance struct {
 	ID             string
-	UserID         string
 	Name           string
 	State          InstanceState
 	ContainerID    string
@@ -80,21 +76,21 @@ const (
 )
 
 type Connection struct {
-	UserID    string
-	Provider  string
-	Status    ConnectionStatus
-	Method    string
-	Account   string
-	Secret    string
-	Error     string
-	UpdatedAt time.Time
+	InstanceID string
+	Provider   string
+	Status     ConnectionStatus
+	Method     string
+	Account    string
+	Secret     string
+	Error      string
+	UpdatedAt  time.Time
 }
 
 type OAuthState struct {
-	StateHash string
-	UserID    string
-	Verifier  string
-	ExpiresAt time.Time
+	StateHash  string
+	InstanceID string
+	Verifier   string
+	ExpiresAt  time.Time
 }
 
 type Store struct {
@@ -146,42 +142,21 @@ func parseTS(v string) time.Time {
 	return t
 }
 
-func (s *Store) EnsureUser(ctx context.Context, id string, now time.Time) error {
-	_, err := s.db.ExecContext(ctx, `INSERT INTO users(id, created_at) VALUES(?, ?) ON CONFLICT(id) DO NOTHING`, id, ts(now))
-	return err
-}
-
 func (s *Store) CreateInstance(ctx context.Context, in Instance) (Instance, error) {
-	tx, err := s.db.BeginTx(ctx, nil)
+	_, err := s.db.ExecContext(ctx, `INSERT INTO instances(id, name, state, created_at, last_activity_at) VALUES(?, ?, ?, ?, ?)`,
+		in.ID, in.Name, in.State, ts(in.CreatedAt), ts(in.LastActivityAt))
 	if err != nil {
 		return Instance{}, err
 	}
-	defer tx.Rollback()
-	if _, err := tx.ExecContext(ctx, `INSERT INTO users(id, created_at) VALUES(?, ?) ON CONFLICT(id) DO NOTHING`, in.UserID, ts(in.CreatedAt)); err != nil {
-		return Instance{}, err
-	}
-	var existing string
-	err = tx.QueryRowContext(ctx, `SELECT id FROM instances WHERE user_id = ? LIMIT 1`, in.UserID).Scan(&existing)
-	if err == nil {
-		return Instance{ID: existing}, ErrConflict
-	}
-	if !errors.Is(err, sql.ErrNoRows) {
-		return Instance{}, err
-	}
-	_, err = tx.ExecContext(ctx, `INSERT INTO instances(id, user_id, name, state, created_at, last_activity_at) VALUES(?, ?, ?, ?, ?, ?)`,
-		in.ID, in.UserID, in.Name, in.State, ts(in.CreatedAt), ts(in.LastActivityAt))
-	if err != nil {
-		return Instance{}, err
-	}
-	return in, tx.Commit()
+	return in, nil
 }
 
-const instanceCols = `id, user_id, name, state, container_id, selected_repo, last_error, created_at, last_activity_at`
+const instanceCols = `id, name, state, container_id, selected_repo, last_error, created_at, last_activity_at`
 
 func scanInstance(row interface{ Scan(...any) error }) (Instance, error) {
 	var in Instance
 	var created, activity string
-	if err := row.Scan(&in.ID, &in.UserID, &in.Name, &in.State, &in.ContainerID, &in.SelectedRepo, &in.LastError, &created, &activity); err != nil {
+	if err := row.Scan(&in.ID, &in.Name, &in.State, &in.ContainerID, &in.SelectedRepo, &in.LastError, &created, &activity); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return Instance{}, ErrNotFound
 		}
@@ -195,18 +170,8 @@ func (s *Store) GetInstance(ctx context.Context, id string) (Instance, error) {
 	return scanInstance(s.db.QueryRowContext(ctx, `SELECT `+instanceCols+` FROM instances WHERE id = ?`, id))
 }
 
-func (s *Store) InstanceByUser(ctx context.Context, userID string) (Instance, error) {
-	return scanInstance(s.db.QueryRowContext(ctx, `SELECT `+instanceCols+` FROM instances WHERE user_id = ? ORDER BY created_at LIMIT 1`, userID))
-}
-
-func (s *Store) ListInstances(ctx context.Context, userID string) ([]Instance, error) {
-	query := `SELECT ` + instanceCols + ` FROM instances`
-	var args []any
-	if userID != "" {
-		query += ` WHERE user_id = ?`
-		args = append(args, userID)
-	}
-	rows, err := s.db.QueryContext(ctx, query+` ORDER BY created_at DESC`, args...)
+func (s *Store) ListInstances(ctx context.Context) ([]Instance, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT `+instanceCols+` FROM instances ORDER BY created_at DESC`)
 	if err != nil {
 		return nil, err
 	}
@@ -346,11 +311,11 @@ func (s *Store) InterruptRunningRuns(ctx context.Context, at time.Time) (int64, 
 	return res.RowsAffected()
 }
 
-func (s *Store) GetConnection(ctx context.Context, userID, provider string) (Connection, error) {
+func (s *Store) GetConnection(ctx context.Context, instanceID, provider string) (Connection, error) {
 	var c Connection
 	var updated string
-	err := s.db.QueryRowContext(ctx, `SELECT user_id, provider, status, method, account, secret, error, updated_at FROM connections WHERE user_id = ? AND provider = ?`, userID, provider).
-		Scan(&c.UserID, &c.Provider, &c.Status, &c.Method, &c.Account, &c.Secret, &c.Error, &updated)
+	err := s.db.QueryRowContext(ctx, `SELECT instance_id, provider, status, method, account, secret, error, updated_at FROM connections WHERE instance_id = ? AND provider = ?`, instanceID, provider).
+		Scan(&c.InstanceID, &c.Provider, &c.Status, &c.Method, &c.Account, &c.Secret, &c.Error, &updated)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Connection{}, ErrNotFound
 	}
@@ -358,8 +323,8 @@ func (s *Store) GetConnection(ctx context.Context, userID, provider string) (Con
 	return c, err
 }
 
-func (s *Store) ListConnections(ctx context.Context, userID string) ([]Connection, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT user_id, provider, status, method, account, secret, error, updated_at FROM connections WHERE user_id = ? ORDER BY provider`, userID)
+func (s *Store) ListConnections(ctx context.Context, instanceID string) ([]Connection, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT instance_id, provider, status, method, account, secret, error, updated_at FROM connections WHERE instance_id = ? ORDER BY provider`, instanceID)
 	if err != nil {
 		return nil, err
 	}
@@ -368,7 +333,7 @@ func (s *Store) ListConnections(ctx context.Context, userID string) ([]Connectio
 	for rows.Next() {
 		var c Connection
 		var updated string
-		if err := rows.Scan(&c.UserID, &c.Provider, &c.Status, &c.Method, &c.Account, &c.Secret, &c.Error, &updated); err != nil {
+		if err := rows.Scan(&c.InstanceID, &c.Provider, &c.Status, &c.Method, &c.Account, &c.Secret, &c.Error, &updated); err != nil {
 			return nil, err
 		}
 		c.UpdatedAt = parseTS(updated)
@@ -378,12 +343,9 @@ func (s *Store) ListConnections(ctx context.Context, userID string) ([]Connectio
 }
 
 func (s *Store) UpsertConnection(ctx context.Context, c Connection) error {
-	if err := s.EnsureUser(ctx, c.UserID, c.UpdatedAt); err != nil {
-		return err
-	}
-	_, err := s.db.ExecContext(ctx, `INSERT INTO connections(user_id, provider, status, method, account, secret, error, updated_at) VALUES(?, ?, ?, ?, ?, ?, ?, ?)
-		ON CONFLICT(user_id, provider) DO UPDATE SET status = excluded.status, method = excluded.method, account = excluded.account, secret = excluded.secret, error = excluded.error, updated_at = excluded.updated_at`,
-		c.UserID, c.Provider, c.Status, c.Method, c.Account, c.Secret, c.Error, ts(c.UpdatedAt))
+	_, err := s.db.ExecContext(ctx, `INSERT INTO connections(instance_id, provider, status, method, account, secret, error, updated_at) VALUES(?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(instance_id, provider) DO UPDATE SET status = excluded.status, method = excluded.method, account = excluded.account, secret = excluded.secret, error = excluded.error, updated_at = excluded.updated_at`,
+		c.InstanceID, c.Provider, c.Status, c.Method, c.Account, c.Secret, c.Error, ts(c.UpdatedAt))
 	return err
 }
 
@@ -391,15 +353,15 @@ func (s *Store) PutOAuthState(ctx context.Context, st OAuthState) error {
 	if _, err := s.db.ExecContext(ctx, `DELETE FROM oauth_states WHERE expires_at < ?`, ts(time.Now())); err != nil {
 		return err
 	}
-	_, err := s.db.ExecContext(ctx, `INSERT INTO oauth_states(state_hash, user_id, verifier, expires_at) VALUES(?, ?, ?, ?)`, st.StateHash, st.UserID, st.Verifier, ts(st.ExpiresAt))
+	_, err := s.db.ExecContext(ctx, `INSERT INTO oauth_states(state_hash, instance_id, verifier, expires_at) VALUES(?, ?, ?, ?)`, st.StateHash, st.InstanceID, st.Verifier, ts(st.ExpiresAt))
 	return err
 }
 
 func (s *Store) TakeOAuthState(ctx context.Context, stateHash string) (OAuthState, error) {
 	var st OAuthState
 	var exp string
-	err := s.db.QueryRowContext(ctx, `DELETE FROM oauth_states WHERE state_hash = ? RETURNING state_hash, user_id, verifier, expires_at`, stateHash).
-		Scan(&st.StateHash, &st.UserID, &st.Verifier, &exp)
+	err := s.db.QueryRowContext(ctx, `DELETE FROM oauth_states WHERE state_hash = ? RETURNING state_hash, instance_id, verifier, expires_at`, stateHash).
+		Scan(&st.StateHash, &st.InstanceID, &st.Verifier, &exp)
 	if errors.Is(err, sql.ErrNoRows) {
 		return OAuthState{}, ErrNotFound
 	}

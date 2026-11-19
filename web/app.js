@@ -162,13 +162,12 @@ async function loadList() {
     const body = $('#instances');
     body.replaceChildren();
     if (!instances.length) {
-      body.append(el('tr', {}, el('td', { colspan: '7', class: 'muted', text: t('list.empty') })));
+      body.append(el('tr', {}, el('td', { colspan: '6', class: 'muted', text: t('list.empty') })));
     }
     for (const inst of instances) {
       const name = inst.name || inst.id;
       const row = el('tr', {},
         el('th', { scope: 'row' }, el('a', { href: `#/instances/${inst.id}`, text: name })),
-        el('td', { 'data-label': t('col.user'), text: inst.external_user_id }),
         el('td', { 'data-label': t('col.state') }, el('span', { class: `badge ${inst.state}`, text: stateText(inst.state) })),
         el('td', { 'data-label': t('col.created'), text: fmtDate(inst.created_at) }),
         el('td', { 'data-label': t('col.activity'), text: fmtDate(inst.last_activity_at) }),
@@ -203,7 +202,7 @@ async function lifecycle(button, id, action, after) {
 }
 
 async function removeInstance(button, inst) {
-  const ok = await confirmDialog(t('delete.title'), t('delete.body', inst.name || inst.id, inst.external_user_id), t('action.delete'));
+  const ok = await confirmDialog(t('delete.title'), t('delete.body', inst.name || inst.id), t('action.delete'));
   if (!ok) return;
   await busy(button, async () => {
     try {
@@ -222,8 +221,8 @@ async function createInstance(event) {
   const button = form.querySelector('button[type=submit]');
   await busy(button, async () => {
     try {
-      const data = await api('POST', '/instances', { external_user_id: form.user.value.trim(), name: form.name.value.trim() });
-      $('#list-status').textContent = data.created ? t('status.created') : t('status.exists');
+      const data = await api('POST', '/instances', { name: form.name.value.trim() });
+      $('#list-status').textContent = t('status.created');
       form.reset();
       location.hash = `#/instances/${data.instance.id}`;
     } catch (err) {
@@ -262,7 +261,6 @@ function renderInfo(inst) {
   $('#detail-title').textContent = inst.name || inst.id;
   const rows = [
     ['info.id', inst.id],
-    ['info.user', inst.external_user_id],
     ['info.state', stateText(inst.state)],
     ['info.created', fmtDate(inst.created_at)],
     ['info.activity', fmtDate(inst.last_activity_at)],
@@ -298,22 +296,20 @@ function renderConnections(data) {
       c.account ? el('p', { class: 'muted', text: `${c.method === 'api_key' ? t('conn.apiKey') : t('conn.account')}: ${c.account}` }) : null,
     );
     const actions = el('div', { class: 'row wrap' });
-    if (c.provider !== 'antigravity') {
-      actions.append(actionButton(t('conn.login'), (e) => startLogin(e.currentTarget, inst.id, c.provider, item)));
-      if (c.method === 'account' && c.status === 'connected') {
-        actions.append(actionButton(t('conn.logout'), (e) => logout(e.currentTarget, inst.id, c.provider)));
-      }
+    actions.append(actionButton(t('conn.login'), (e) => startLogin(e.currentTarget, inst.id, c.provider, item)));
+    if (c.method === 'account' && c.status === 'connected') {
+      actions.append(actionButton(t('conn.logout'), (e) => logout(e.currentTarget, inst.id, c.provider)));
     }
-    actions.append(apiKeyForm(inst.external_user_id, c.provider));
+    actions.append(apiKeyForm(inst.id, c.provider));
     if (c.method === 'api_key' && c.status === 'connected') {
-      actions.append(actionButton(t('conn.removeKey'), (e) => removeKey(e.currentTarget, inst.external_user_id, c.provider), 'danger'));
+      actions.append(actionButton(t('conn.removeKey'), (e) => removeKey(e.currentTarget, inst.id, c.provider), 'danger'));
     }
     item.append(actions);
     list.append(item);
   }
 }
 
-function apiKeyForm(userId, agent) {
+function apiKeyForm(instanceId, agent) {
   const id = `key-${agent}`;
   const form = el('form', { class: 'row wrap' },
     el('label', { for: id, class: 'visually-hidden', text: t('conn.keyLabel', TITLES[agent]) }),
@@ -325,7 +321,7 @@ function apiKeyForm(userId, agent) {
     const input = form.querySelector('input');
     await busy(form.querySelector('button'), async () => {
       try {
-        await api('PUT', `/users/${encodeURIComponent(userId)}/agents/${agent}/api-key`, { api_key: input.value });
+        await api('PUT', `/instances/${encodeURIComponent(instanceId)}/agents/${agent}/api-key`, { api_key: input.value });
         input.value = '';
         $('#detail-status').textContent = t('status.keySaved');
         loadDetail(state.instance.id, true, true);
@@ -337,10 +333,10 @@ function apiKeyForm(userId, agent) {
   return form;
 }
 
-async function removeKey(button, userId, agent) {
+async function removeKey(button, instanceId, agent) {
   await busy(button, async () => {
     try {
-      await api('DELETE', `/users/${encodeURIComponent(userId)}/agents/${agent}/api-key`);
+      await api('DELETE', `/instances/${encodeURIComponent(instanceId)}/agents/${agent}/api-key`);
       $('#detail-status').textContent = t('status.keyRemoved');
     } catch (err) {
       $('#detail-status').textContent = errorText(err);

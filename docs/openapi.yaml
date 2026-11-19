@@ -1,15 +1,15 @@
 openapi: 3.1.0
 info:
   title: Arara Agent Gateway API
-  version: 1.0.0
+  version: 2.0.0
   license:
     name: MIT
     identifier: MIT
   description: |
     Server-to-server API that manages isolated coding agent instances (Claude Code, Codex, Google Antigravity).
-    Every request except `/api/health` and `/api/openapi.yaml` requires the `apikey` header.
-    The `X-User-Id` header restricts the request to one external user. The integration key always requires it.
-    Never call this API from a browser or desktop client with a real key: only the AC-WEB backend holds it.
+    Every request except `/api/health` and `/api/openapi.yaml` requires the global `apikey` header.
+    Each instance is self-contained with its own container, volume, connections, GitHub token and run history.
+    The integrating backend maps instances to its own users.
 servers:
   - url: http://localhost:3000
 security:
@@ -20,7 +20,6 @@ tags:
   - name: runs
   - name: agents
   - name: repos
-  - name: users
   - name: github
 paths:
   /api/health:
@@ -43,7 +42,6 @@ paths:
     get:
       tags: [agents]
       summary: Agents supported by the gateway
-      parameters: [{ $ref: "#/components/parameters/UserScope" }]
       responses:
         "200":
           description: Agent catalog
@@ -59,8 +57,7 @@ paths:
   /api/instances:
     get:
       tags: [instances]
-      summary: List instances (only the scoped user's when X-User-Id is sent)
-      parameters: [{ $ref: "#/components/parameters/UserScope" }]
+      summary: List all instances
       responses:
         "200":
           description: Instances
@@ -75,33 +72,25 @@ paths:
         "401": { $ref: "#/components/responses/Error" }
     post:
       tags: [instances]
-      summary: Create the user's instance (idempotent; does not start a container)
-      parameters: [{ $ref: "#/components/parameters/UserScope" }]
+      summary: Create a new instance (does not start a container)
       requestBody:
-        required: true
+        required: false
         content:
           application/json:
             schema:
               type: object
               additionalProperties: false
               properties:
-                external_user_id: { $ref: "#/components/schemas/UserId" }
                 name: { type: string, maxLength: 80 }
       responses:
         "201":
           description: Created
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/InstanceCreated" }
-        "200":
-          description: The user already had an instance; it is returned unchanged
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/InstanceCreated" }
+              schema: { $ref: "#/components/responses/InstanceResponse" }
         "400": { $ref: "#/components/responses/Error" }
-        "403": { $ref: "#/components/responses/Error" }
   /api/instances/{id}:
-    parameters: [{ $ref: "#/components/parameters/InstanceId" }, { $ref: "#/components/parameters/UserScope" }]
+    parameters: [{ $ref: "#/components/parameters/InstanceId" }]
     get:
       tags: [instances]
       summary: Get an instance
@@ -127,7 +116,7 @@ paths:
         "404": { $ref: "#/components/responses/Error" }
     delete:
       tags: [instances]
-      summary: Permanently delete container, volume, history and instance state
+      summary: Permanently delete container, volume, connections, history and instance state
       parameters:
         - name: confirm
           in: query
@@ -139,7 +128,7 @@ paths:
         "400": { $ref: "#/components/responses/Error" }
         "404": { $ref: "#/components/responses/Error" }
   /api/instances/{id}/start:
-    parameters: [{ $ref: "#/components/parameters/InstanceId" }, { $ref: "#/components/parameters/UserScope" }]
+    parameters: [{ $ref: "#/components/parameters/InstanceId" }]
     post:
       tags: [instances]
       summary: Start the container (idempotent)
@@ -149,7 +138,7 @@ paths:
         "429": { $ref: "#/components/responses/Error" }
         "503": { $ref: "#/components/responses/Error" }
   /api/instances/{id}/stop:
-    parameters: [{ $ref: "#/components/parameters/InstanceId" }, { $ref: "#/components/parameters/UserScope" }]
+    parameters: [{ $ref: "#/components/parameters/InstanceId" }]
     post:
       tags: [instances]
       summary: Cancel active runs and logins, stop and remove the container, keep the volume (idempotent)
@@ -157,7 +146,7 @@ paths:
         "200": { $ref: "#/components/responses/InstanceResponse" }
         "404": { $ref: "#/components/responses/Error" }
   /api/instances/{id}/status:
-    parameters: [{ $ref: "#/components/parameters/InstanceId" }, { $ref: "#/components/parameters/UserScope" }]
+    parameters: [{ $ref: "#/components/parameters/InstanceId" }]
     get:
       tags: [instances]
       summary: Instance with live agent connection states and GitHub state
@@ -175,8 +164,26 @@ paths:
                     items: { $ref: "#/components/schemas/Connection" }
                   github: { $ref: "#/components/schemas/Connection" }
         "404": { $ref: "#/components/responses/Error" }
+  /api/instances/{id}/connections:
+    parameters: [{ $ref: "#/components/parameters/InstanceId" }]
+    get:
+      tags: [instances]
+      summary: Stored state of GitHub and the three agents (no probing, no secrets)
+      responses:
+        "200":
+          description: Connections
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  instance_id: { type: string }
+                  connections:
+                    type: array
+                    items: { $ref: "#/components/schemas/Connection" }
+        "404": { $ref: "#/components/responses/Error" }
   /api/instances/{id}/history:
-    parameters: [{ $ref: "#/components/parameters/InstanceId" }, { $ref: "#/components/parameters/UserScope" }]
+    parameters: [{ $ref: "#/components/parameters/InstanceId" }]
     get:
       tags: [runs]
       summary: The 20 most recent runs, newest first
@@ -195,7 +202,7 @@ paths:
                   limit: { type: integer, const: 20 }
         "404": { $ref: "#/components/responses/Error" }
   /api/instances/{id}/agents:
-    parameters: [{ $ref: "#/components/parameters/InstanceId" }, { $ref: "#/components/parameters/UserScope" }]
+    parameters: [{ $ref: "#/components/parameters/InstanceId" }]
     get:
       tags: [agents]
       summary: Connection state of each agent (probed in the container when it is running)
@@ -210,11 +217,51 @@ paths:
                   agents:
                     type: array
                     items: { $ref: "#/components/schemas/Connection" }
+  /api/instances/{id}/agents/{agent}/api-key:
+    parameters:
+      - { $ref: "#/components/parameters/InstanceId" }
+      - { $ref: "#/components/parameters/Agent" }
+    put:
+      tags: [agents]
+      summary: Store a provider API key for this instance (encrypted; injected only during runs)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [api_key]
+              properties:
+                api_key: { type: string, minLength: 8, maxLength: 512, writeOnly: true }
+      responses:
+        "200":
+          description: Stored
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  connection: { $ref: "#/components/schemas/Connection" }
+        "400": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+    delete:
+      tags: [agents]
+      summary: Remove the stored API key
+      responses:
+        "200":
+          description: Removed
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  connection: { $ref: "#/components/schemas/Connection" }
+        "404": { $ref: "#/components/responses/Error" }
   /api/instances/{id}/agents/{agent}/run:
     parameters:
       - { $ref: "#/components/parameters/InstanceId" }
       - { $ref: "#/components/parameters/Agent" }
-      - { $ref: "#/components/parameters/UserScope" }
     post:
       tags: [runs]
       summary: Start a run; follow it with the stream endpoint
@@ -243,7 +290,6 @@ paths:
     parameters:
       - { $ref: "#/components/parameters/InstanceId" }
       - { $ref: "#/components/parameters/RunId" }
-      - { $ref: "#/components/parameters/UserScope" }
     get:
       tags: [runs]
       summary: Get a run
@@ -261,7 +307,6 @@ paths:
     parameters:
       - { $ref: "#/components/parameters/InstanceId" }
       - { $ref: "#/components/parameters/RunId" }
-      - { $ref: "#/components/parameters/UserScope" }
       - name: Last-Event-ID
         in: header
         schema: { type: integer }
@@ -286,7 +331,6 @@ paths:
     parameters:
       - { $ref: "#/components/parameters/InstanceId" }
       - { $ref: "#/components/parameters/RunId" }
-      - { $ref: "#/components/parameters/UserScope" }
     post:
       tags: [runs]
       summary: Cancel an active run (its processes are terminated inside the container)
@@ -299,10 +343,9 @@ paths:
     parameters:
       - { $ref: "#/components/parameters/InstanceId" }
       - { $ref: "#/components/parameters/Agent" }
-      - { $ref: "#/components/parameters/UserScope" }
     post:
       tags: [agents]
-      summary: Start the official account sign-in of the CLI (claude, codex)
+      summary: Start the official account sign-in of the CLI (claude, codex, antigravity)
       responses:
         "202":
           description: Login session
@@ -334,10 +377,9 @@ paths:
     parameters:
       - { $ref: "#/components/parameters/InstanceId" }
       - { $ref: "#/components/parameters/Agent" }
-      - { $ref: "#/components/parameters/UserScope" }
     post:
       tags: [agents]
-      summary: Send the one-line code shown after sign-in (Claude Code)
+      summary: Send the one-line code shown after sign-in (Claude Code, Google Antigravity)
       requestBody:
         required: true
         content:
@@ -360,7 +402,6 @@ paths:
     parameters:
       - { $ref: "#/components/parameters/InstanceId" }
       - { $ref: "#/components/parameters/Agent" }
-      - { $ref: "#/components/parameters/UserScope" }
     post:
       tags: [agents]
       summary: Sign the CLI account out inside the instance
@@ -374,8 +415,103 @@ paths:
                 properties:
                   connection: { $ref: "#/components/schemas/Connection" }
         "409": { $ref: "#/components/responses/Error" }
+  /api/instances/{id}/github/connect:
+    parameters: [{ $ref: "#/components/parameters/InstanceId" }]
+    post:
+      tags: [github]
+      summary: Create a single-use state (10 minutes, PKCE) and the GitHub authorization URL
+      responses:
+        "200":
+          description: Redirect the user's browser to authorize_url
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  authorize_url: { type: string, format: uri }
+                  expires_at: { type: string, format: date-time }
+        "404": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
+  /api/instances/{id}/github/callback:
+    parameters: [{ $ref: "#/components/parameters/InstanceId" }]
+    post:
+      tags: [github]
+      summary: Complete the connection with the code and state received by the redirect page
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [code, state]
+              properties:
+                code: { type: string }
+                state: { type: string }
+      responses:
+        "200":
+          description: Connected
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  connection: { $ref: "#/components/schemas/Connection" }
+        "400": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+  /api/instances/{id}/github:
+    parameters: [{ $ref: "#/components/parameters/InstanceId" }]
+    get:
+      tags: [github]
+      summary: GitHub connection state (validates the token with GitHub)
+      responses:
+        "200":
+          description: Status
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  connection: { $ref: "#/components/schemas/Connection" }
+                  enabled: { type: boolean }
+        "404": { $ref: "#/components/responses/Error" }
+    delete:
+      tags: [github]
+      summary: Revoke the grant at GitHub and forget the token
+      responses:
+        "200":
+          description: Disconnected
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  connection: { $ref: "#/components/schemas/Connection" }
+        "404": { $ref: "#/components/responses/Error" }
+  /api/instances/{id}/github/repos:
+    parameters:
+      - { $ref: "#/components/parameters/InstanceId" }
+      - { name: page, in: query, schema: { type: integer, minimum: 1, maximum: 100 } }
+    get:
+      tags: [github]
+      summary: Repositories the connection can access (100 per page)
+      responses:
+        "200":
+          description: Repositories
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  repos:
+                    type: array
+                    items: { $ref: "#/components/schemas/GitHubRepo" }
+                  page: { type: integer }
+                  has_more: { type: boolean }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
   /api/instances/{id}/repos:
-    parameters: [{ $ref: "#/components/parameters/InstanceId" }, { $ref: "#/components/parameters/UserScope" }]
+    parameters: [{ $ref: "#/components/parameters/InstanceId" }]
     get:
       tags: [repos]
       summary: Repositories cloned in the instance
@@ -422,7 +558,6 @@ paths:
   /api/instances/{id}/repos/{owner}/{name}/push:
     parameters:
       - { $ref: "#/components/parameters/InstanceId" }
-      - { $ref: "#/components/parameters/UserScope" }
       - { name: owner, in: path, required: true, schema: { type: string } }
       - { name: name, in: path, required: true, schema: { type: string } }
     post:
@@ -453,162 +588,6 @@ paths:
         "400": { $ref: "#/components/responses/Error" }
         "403": { $ref: "#/components/responses/Error" }
         "409": { $ref: "#/components/responses/Error" }
-  /api/users/{userId}/instance:
-    parameters: [{ $ref: "#/components/parameters/UserId" }, { $ref: "#/components/parameters/UserScope" }]
-    get:
-      tags: [users]
-      summary: The user's instance (lets the backend avoid storing instance ids)
-      responses:
-        "200": { $ref: "#/components/responses/InstanceResponse" }
-        "404": { $ref: "#/components/responses/Error" }
-  /api/users/{userId}/connections:
-    parameters: [{ $ref: "#/components/parameters/UserId" }, { $ref: "#/components/parameters/UserScope" }]
-    get:
-      tags: [users]
-      summary: Stored state of GitHub and the three agents (no probing, no secrets)
-      responses:
-        "200":
-          description: Connections
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  user_id: { $ref: "#/components/schemas/UserId" }
-                  connections:
-                    type: array
-                    items: { $ref: "#/components/schemas/Connection" }
-  /api/users/{userId}/agents/{agent}/api-key:
-    parameters:
-      - { $ref: "#/components/parameters/UserId" }
-      - { $ref: "#/components/parameters/Agent" }
-      - { $ref: "#/components/parameters/UserScope" }
-    put:
-      tags: [users]
-      summary: Store the user's own provider API key (encrypted; injected only during runs)
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              additionalProperties: false
-              required: [api_key]
-              properties:
-                api_key: { type: string, minLength: 8, maxLength: 512, writeOnly: true }
-      responses:
-        "200":
-          description: Stored
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  connection: { $ref: "#/components/schemas/Connection" }
-        "400": { $ref: "#/components/responses/Error" }
-    delete:
-      tags: [users]
-      summary: Remove the stored API key
-      responses:
-        "200":
-          description: Removed
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  connection: { $ref: "#/components/schemas/Connection" }
-  /api/users/{userId}/github/connect:
-    parameters: [{ $ref: "#/components/parameters/UserId" }, { $ref: "#/components/parameters/UserScope" }]
-    post:
-      tags: [github]
-      summary: Create a single-use state (10 minutes, PKCE) and the GitHub authorization URL
-      responses:
-        "200":
-          description: Redirect the user's browser to authorize_url
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  authorize_url: { type: string, format: uri }
-                  expires_at: { type: string, format: date-time }
-        "503": { $ref: "#/components/responses/Error" }
-  /api/users/{userId}/github/callback:
-    parameters: [{ $ref: "#/components/parameters/UserId" }, { $ref: "#/components/parameters/UserScope" }]
-    post:
-      tags: [github]
-      summary: Complete the connection with the code and state received by the AC-WEB redirect page
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              additionalProperties: false
-              required: [code, state]
-              properties:
-                code: { type: string }
-                state: { type: string }
-      responses:
-        "200":
-          description: Connected
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  connection: { $ref: "#/components/schemas/Connection" }
-        "400": { $ref: "#/components/responses/Error" }
-  /api/users/{userId}/github:
-    parameters: [{ $ref: "#/components/parameters/UserId" }, { $ref: "#/components/parameters/UserScope" }]
-    get:
-      tags: [github]
-      summary: GitHub connection state (validates the token with GitHub)
-      responses:
-        "200":
-          description: Status
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  connection: { $ref: "#/components/schemas/Connection" }
-                  enabled: { type: boolean }
-    delete:
-      tags: [github]
-      summary: Revoke the grant at GitHub and forget the token
-      responses:
-        "200":
-          description: Disconnected
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  connection: { $ref: "#/components/schemas/Connection" }
-  /api/users/{userId}/github/repos:
-    parameters:
-      - { $ref: "#/components/parameters/UserId" }
-      - { $ref: "#/components/parameters/UserScope" }
-      - { name: page, in: query, schema: { type: integer, minimum: 1, maximum: 100 } }
-    get:
-      tags: [github]
-      summary: Repositories the connection can access (100 per page)
-      responses:
-        "200":
-          description: Repositories
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  repos:
-                    type: array
-                    items: { $ref: "#/components/schemas/GitHubRepo" }
-                  page: { type: integer }
-                  has_more: { type: boolean }
-        "409": { $ref: "#/components/responses/Error" }
 components:
   securitySchemes:
     apikey:
@@ -616,12 +595,6 @@ components:
       in: header
       name: apikey
   parameters:
-    UserScope:
-      name: X-User-Id
-      in: header
-      required: false
-      description: External user the request acts for. Required with the integration key.
-      schema: { $ref: "#/components/schemas/UserId" }
     InstanceId:
       name: id
       in: path
@@ -632,11 +605,6 @@ components:
       in: path
       required: true
       schema: { type: string, pattern: "^run_[0-9a-f]{24}$" }
-    UserId:
-      name: userId
-      in: path
-      required: true
-      schema: { $ref: "#/components/schemas/UserId" }
     Agent:
       name: agent
       in: path
@@ -657,9 +625,6 @@ components:
             properties:
               instance: { $ref: "#/components/schemas/Instance" }
   schemas:
-    UserId:
-      type: string
-      pattern: "^[A-Za-z0-9._:@-]{1,128}$"
     AgentName:
       type: string
       enum: [claude, codex, antigravity]
@@ -697,7 +662,6 @@ components:
       type: object
       properties:
         id: { type: string }
-        external_user_id: { $ref: "#/components/schemas/UserId" }
         name: { type: string }
         state: { type: string, enum: [stopped, starting, running, stopping, error] }
         created_at: { type: string, format: date-time }
@@ -712,11 +676,6 @@ components:
           type: array
           items: { $ref: "#/components/schemas/AgentName" }
         last_error: { type: string }
-    InstanceCreated:
-      type: object
-      properties:
-        instance: { $ref: "#/components/schemas/Instance" }
-        created: { type: boolean }
     RunRequest:
       type: object
       additionalProperties: false
@@ -780,7 +739,7 @@ components:
         status: { type: string, enum: [starting, waiting_for_user, succeeded, failed, cancelled] }
         url: { type: string, format: uri, description: Official sign-in page to open in the user's browser }
         code: { type: string, description: Device code to type on the sign-in page (Codex) }
-        needs_input: { type: boolean, description: The CLI waits for the code shown after sign-in (Claude Code) }
+        needs_input: { type: boolean, description: The CLI waits for the code shown after sign-in (Claude Code, Google Antigravity) }
         error: { type: string, enum: [login_timeout, login_failed, not_authenticated] }
         expires_at: { type: string, format: date-time }
     LoginResponse:

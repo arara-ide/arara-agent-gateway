@@ -17,7 +17,6 @@ import (
 
 type instanceView struct {
 	ID             string     `json:"id"`
-	ExternalUserID string     `json:"external_user_id"`
 	Name           string     `json:"name"`
 	State          string     `json:"state"`
 	CreatedAt      time.Time  `json:"created_at"`
@@ -31,7 +30,7 @@ type instanceView struct {
 }
 
 func (s *Server) view(in store.Instance) instanceView {
-	v := instanceView{ID: in.ID, ExternalUserID: in.UserID, Name: in.Name, State: string(in.State), CreatedAt: in.CreatedAt, LastActivityAt: in.LastActivityAt, SelectedRepo: in.SelectedRepo, Agents: agent.Names(), RunningAgents: s.Runs.ActiveAgents(in.ID), LastError: in.LastError}
+	v := instanceView{ID: in.ID, Name: in.Name, State: string(in.State), CreatedAt: in.CreatedAt, LastActivityAt: in.LastActivityAt, SelectedRepo: in.SelectedRepo, Agents: agent.Names(), RunningAgents: s.Runs.ActiveAgents(in.ID), LastError: in.LastError}
 	v.ActiveRuns = len(v.RunningAgents)
 	if in.State == store.StateRunning && s.Instances.Busy(in.ID) == 0 {
 		t := in.LastActivityAt.Add(s.IdleTimeout)
@@ -64,7 +63,7 @@ func (s *Server) listAgents(w http.ResponseWriter, r *http.Request) error {
 }
 
 func (s *Server) listInstances(w http.ResponseWriter, r *http.Request) error {
-	list, err := s.Store.ListInstances(r.Context(), scopeOf(r).userID)
+	list, err := s.Store.ListInstances(r.Context())
 	if err != nil {
 		return err
 	}
@@ -78,35 +77,20 @@ func (s *Server) listInstances(w http.ResponseWriter, r *http.Request) error {
 
 func (s *Server) createInstance(w http.ResponseWriter, r *http.Request) error {
 	var body struct {
-		ExternalUserID string `json:"external_user_id"`
-		Name           string `json:"name"`
+		Name string `json:"name"`
 	}
-	if err := decode(r, &body); err != nil {
+	if err := decodeOptional(r, &body); err != nil {
 		return err
-	}
-	sc := scopeOf(r)
-	if body.ExternalUserID == "" {
-		body.ExternalUserID = sc.userID
-	}
-	if !userIDPattern.MatchString(body.ExternalUserID) {
-		return errInvalidUser
-	}
-	if sc.userID != "" && sc.userID != body.ExternalUserID {
-		return newError(http.StatusForbidden, "user_mismatch", "external_user_id must match X-User-Id")
 	}
 	name, err := cleanName(body.Name)
 	if err != nil {
 		return err
 	}
-	in, created, err := s.Instances.Create(r.Context(), body.ExternalUserID, name)
+	in, err := s.Instances.Create(r.Context(), name)
 	if err != nil {
 		return err
 	}
-	status := http.StatusOK
-	if created {
-		status = http.StatusCreated
-	}
-	writeJSON(w, status, map[string]any{"instance": s.view(in), "created": created})
+	writeJSON(w, http.StatusCreated, map[string]any{"instance": s.view(in)})
 	return nil
 }
 
@@ -120,19 +104,6 @@ func cleanName(name string) (string, error) {
 
 func (s *Server) getInstance(w http.ResponseWriter, r *http.Request) error {
 	in, err := s.instanceParam(r)
-	if err != nil {
-		return err
-	}
-	writeJSON(w, http.StatusOK, map[string]any{"instance": s.view(in)})
-	return nil
-}
-
-func (s *Server) userInstance(w http.ResponseWriter, r *http.Request) error {
-	uid, err := s.userParam(r)
-	if err != nil {
-		return err
-	}
-	in, err := s.Store.InstanceByUser(r.Context(), uid)
 	if err != nil {
 		return err
 	}
@@ -230,7 +201,7 @@ func (s *Server) instanceStatus(w http.ResponseWriter, r *http.Request) error {
 	if err != nil {
 		return err
 	}
-	gh, err := s.GitHub.Status(r.Context(), in.UserID)
+	gh, err := s.GitHub.Status(r.Context(), in.ID)
 	if err != nil {
 		return err
 	}
@@ -248,6 +219,23 @@ func (s *Server) instanceAgents(w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"agents": s.agentConnections(r.Context(), in)})
+	return nil
+}
+
+func (s *Server) instanceConnections(w http.ResponseWriter, r *http.Request) error {
+	in, err := s.instanceParam(r)
+	if err != nil {
+		return err
+	}
+	out := []connectionView{}
+	for _, p := range append([]string{github.Provider}, agent.Names()...) {
+		c := s.Connections.Connection(r.Context(), in.ID, p)
+		if p == github.Provider && c.Status == store.ConnSetupRequired {
+			c.Status = store.ConnDisconnected
+		}
+		out = append(out, connView(c))
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"instance_id": in.ID, "connections": out})
 	return nil
 }
 
@@ -497,25 +485,8 @@ func (s *Server) pushRepo(w http.ResponseWriter, r *http.Request) error {
 	return nil
 }
 
-func (s *Server) userConnections(w http.ResponseWriter, r *http.Request) error {
-	uid, err := s.userParam(r)
-	if err != nil {
-		return err
-	}
-	out := []connectionView{}
-	for _, p := range append([]string{github.Provider}, agent.Names()...) {
-		c := s.Connections.Connection(r.Context(), uid, p)
-		if p == github.Provider && c.Status == store.ConnSetupRequired {
-			c.Status = store.ConnDisconnected
-		}
-		out = append(out, connView(c))
-	}
-	writeJSON(w, http.StatusOK, map[string]any{"user_id": uid, "connections": out})
-	return nil
-}
-
 func (s *Server) setAPIKey(w http.ResponseWriter, r *http.Request) error {
-	uid, err := s.userParam(r)
+	in, err := s.instanceParam(r)
 	if err != nil {
 		return err
 	}
@@ -525,7 +496,7 @@ func (s *Server) setAPIKey(w http.ResponseWriter, r *http.Request) error {
 	if err := decode(r, &body); err != nil {
 		return err
 	}
-	c, err := s.Connections.SetAPIKey(r.Context(), uid, r.PathValue("agent"), body.APIKey)
+	c, err := s.Connections.SetAPIKey(r.Context(), in.ID, r.PathValue("agent"), body.APIKey)
 	if err != nil {
 		return err
 	}
@@ -534,11 +505,11 @@ func (s *Server) setAPIKey(w http.ResponseWriter, r *http.Request) error {
 }
 
 func (s *Server) removeAPIKey(w http.ResponseWriter, r *http.Request) error {
-	uid, err := s.userParam(r)
+	in, err := s.instanceParam(r)
 	if err != nil {
 		return err
 	}
-	c, err := s.Connections.RemoveAPIKey(r.Context(), uid, r.PathValue("agent"))
+	c, err := s.Connections.RemoveAPIKey(r.Context(), in.ID, r.PathValue("agent"))
 	if err != nil {
 		return err
 	}
@@ -547,11 +518,11 @@ func (s *Server) removeAPIKey(w http.ResponseWriter, r *http.Request) error {
 }
 
 func (s *Server) githubConnect(w http.ResponseWriter, r *http.Request) error {
-	uid, err := s.userParam(r)
+	in, err := s.instanceParam(r)
 	if err != nil {
 		return err
 	}
-	u, exp, err := s.GitHub.Connect(r.Context(), uid)
+	u, exp, err := s.GitHub.Connect(r.Context(), in.ID)
 	if err != nil {
 		return err
 	}
@@ -560,7 +531,7 @@ func (s *Server) githubConnect(w http.ResponseWriter, r *http.Request) error {
 }
 
 func (s *Server) githubCallback(w http.ResponseWriter, r *http.Request) error {
-	uid, err := s.userParam(r)
+	in, err := s.instanceParam(r)
 	if err != nil {
 		return err
 	}
@@ -571,7 +542,7 @@ func (s *Server) githubCallback(w http.ResponseWriter, r *http.Request) error {
 	if err := decode(r, &body); err != nil {
 		return err
 	}
-	c, err := s.GitHub.Complete(r.Context(), uid, body.Code, body.State)
+	c, err := s.GitHub.Complete(r.Context(), in.ID, body.Code, body.State)
 	if err != nil {
 		return err
 	}
@@ -580,11 +551,11 @@ func (s *Server) githubCallback(w http.ResponseWriter, r *http.Request) error {
 }
 
 func (s *Server) githubStatus(w http.ResponseWriter, r *http.Request) error {
-	uid, err := s.userParam(r)
+	in, err := s.instanceParam(r)
 	if err != nil {
 		return err
 	}
-	c, err := s.GitHub.Status(r.Context(), uid)
+	c, err := s.GitHub.Status(r.Context(), in.ID)
 	if err != nil {
 		return err
 	}
@@ -593,7 +564,7 @@ func (s *Server) githubStatus(w http.ResponseWriter, r *http.Request) error {
 }
 
 func (s *Server) githubRepos(w http.ResponseWriter, r *http.Request) error {
-	uid, err := s.userParam(r)
+	in, err := s.instanceParam(r)
 	if err != nil {
 		return err
 	}
@@ -601,7 +572,7 @@ func (s *Server) githubRepos(w http.ResponseWriter, r *http.Request) error {
 	if page < 1 || page > 100 {
 		page = 1
 	}
-	repos, more, err := s.GitHub.Repos(r.Context(), uid, page)
+	repos, more, err := s.GitHub.Repos(r.Context(), in.ID, page)
 	if err != nil {
 		return err
 	}
@@ -610,11 +581,11 @@ func (s *Server) githubRepos(w http.ResponseWriter, r *http.Request) error {
 }
 
 func (s *Server) githubDisconnect(w http.ResponseWriter, r *http.Request) error {
-	uid, err := s.userParam(r)
+	in, err := s.instanceParam(r)
 	if err != nil {
 		return err
 	}
-	c, err := s.GitHub.Disconnect(r.Context(), uid)
+	c, err := s.GitHub.Disconnect(r.Context(), in.ID)
 	if err != nil {
 		return err
 	}

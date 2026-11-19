@@ -25,10 +25,9 @@ const (
 )
 
 var (
-	ErrNotRunning    = errors.New("instance is not running")
-	ErrCapacity      = errors.New("maximum number of active instances reached")
-	ErrImageMissing  = errors.New("runtime image is not available on the docker host")
-	ErrInstanceExist = errors.New("user already has an instance")
+	ErrNotRunning   = errors.New("instance is not running")
+	ErrCapacity     = errors.New("maximum number of active instances reached")
+	ErrImageMissing = errors.New("runtime image is not available on the docker host")
 )
 
 type Settings struct {
@@ -78,18 +77,10 @@ func (m *Manager) lock(id string) func() {
 	return mu.Unlock
 }
 
-func (m *Manager) Create(ctx context.Context, userID, name string) (store.Instance, bool, error) {
+func (m *Manager) Create(ctx context.Context, name string) (store.Instance, error) {
 	now := m.now().UTC()
-	in := store.Instance{ID: NewID("inst_"), UserID: userID, Name: name, State: store.StateStopped, CreatedAt: now, LastActivityAt: now}
-	created, err := m.store.CreateInstance(ctx, in)
-	if errors.Is(err, store.ErrConflict) {
-		existing, gerr := m.store.GetInstance(ctx, created.ID)
-		if gerr != nil {
-			return store.Instance{}, false, gerr
-		}
-		return existing, false, nil
-	}
-	return created, err == nil, err
+	in := store.Instance{ID: NewID("inst_"), Name: name, State: store.StateStopped, CreatedAt: now, LastActivityAt: now}
+	return m.store.CreateInstance(ctx, in)
 }
 
 func (m *Manager) Get(ctx context.Context, id string) (store.Instance, error) {
@@ -333,7 +324,7 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 		}
 		running[id] = c.Running
 	}
-	instances, err := m.store.ListInstances(ctx, "")
+	instances, err := m.store.ListInstances(ctx)
 	if err != nil {
 		return err
 	}
