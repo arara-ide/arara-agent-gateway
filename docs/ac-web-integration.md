@@ -197,6 +197,7 @@ Cancelar: `POST /api/instances/{id}/runs/{runId}/cancel`. O evento `done` chega 
 ## 9. Ciclo de vida e inatividade
 
 - `POST …/start` e `POST …/stop` são idempotentes.
+- Contam como atividade: `start`, execuções, logins, logout e operações de repositório. Leituras (`status`, `history`, listas) não mantêm a instância ligada, então o PWA pode consultar o estado sem impedir o desligamento.
 - A instância desliga sozinha depois de `IDLE_TIMEOUT_SECONDS` sem atividade (padrão: 5 minutos). Execuções e logins em andamento nunca são interrompidos. A contagem recomeça quando terminam.
 - Desligar não desconecta contas: logins dos CLIs, chaves, GitHub, repositórios e histórico continuam.
 - `DELETE /api/instances/{id}?confirm={id}` apaga container, volume (logins de conta, repositórios e sessões) e histórico. As chaves de API e o GitHub continuam na conta do usuário. Peça confirmação explícita na interface.
