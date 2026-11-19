@@ -3,21 +3,21 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    image: ${APP_NAME:-arara-agent-gateway}-${ENVIRONMENT:-local}
-    hostname: ${APP_NAME:-arara-agent-gateway}-${ENVIRONMENT:-local}
+    image: ${APP_NAME}-${ENVIRONMENT}
+    hostname: ${APP_NAME}-${ENVIRONMENT}
     env_file:
       - .env
     environment:
       DATA_DIR: /data
-      PORT: "${PORT:-3000}"
+      PORT: "${PORT}"
       DOCKER_SOCKET: /var/run/docker.sock
     ports:
-      - "127.0.0.1:${GATEWAY_PORT:-3000}:${PORT:-3000}"
+      - "127.0.0.1:${GATEWAY_PORT}:${PORT}"
     volumes:
       - gateway-data:/data
       - /var/run/docker.sock:/var/run/docker.sock
     group_add:
-      - "${DOCKER_GID:-0}"
+      - "${DOCKER_GID}"
     read_only: true
     cap_drop:
       - ALL
@@ -32,7 +32,7 @@ services:
     build:
       context: .
       dockerfile: runtime/Dockerfile
-    image: ${RUNTIME_IMAGE:-arara-agent-runtime:local}
+    image: ${RUNTIME_IMAGE}
     command: ["true"]
     restart: "no"
 

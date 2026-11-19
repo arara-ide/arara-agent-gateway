@@ -5,13 +5,13 @@ services:
     networks:
       proxy:
         aliases:
-          - ${APP_NAME:-arara-agent-gateway}-${ENVIRONMENT:-production}
+          - ${APP_NAME}-${ENVIRONMENT}
     labels:
       - "traefik.enable=true"
-      - "traefik.docker.network=${PROXY_NETWORK:-microservices_network}"
-      - "traefik.http.services.${APP_NAME:-arara-agent-gateway}-${ENVIRONMENT:-production}.loadbalancer.server.port=${PORT:-3000}"
+      - "traefik.docker.network=${PROXY_NETWORK}"
+      - "traefik.http.services.${APP_NAME}-${ENVIRONMENT}.loadbalancer.server.port=${PORT}"
 
 networks:
   proxy:
     external: true
-    name: ${PROXY_NETWORK:-microservices_network}
+    name: ${PROXY_NETWORK}
