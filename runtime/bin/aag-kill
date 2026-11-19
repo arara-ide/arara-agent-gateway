@@ -1,0 +1,35 @@
+#!/bin/sh
+set -u
+tree() {
+  for c in $(pgrep -P "$1" 2>/dev/null); do
+    tree "$c"
+  done
+  echo "$1"
+}
+kill_file() {
+  [ -f "$1" ] || return 0
+  pid=$(cat "$1" 2>/dev/null) || return 0
+  case "$pid" in
+    *[!0-9]*|"") rm -f "$1"; return 0 ;;
+  esac
+  pids=$(tree "$pid")
+  kill -TERM $pids 2>/dev/null
+  i=0
+  while [ $i -lt 20 ] && kill -0 "$pid" 2>/dev/null; do
+    sleep 0.25
+    i=$((i + 1))
+  done
+  kill -KILL $pids $(tree "$pid") 2>/dev/null
+  rm -f "$1"
+}
+target="${1:-}"
+case "$target" in
+  all)
+    for f in /tmp/aag/*.pid; do
+      kill_file "$f"
+    done
+    ;;
+  *[!A-Za-z0-9_]*|"") echo "aag-kill: invalid id" >&2; exit 64 ;;
+  *) kill_file "/tmp/aag/$target.pid" ;;
+esac
+exit 0
