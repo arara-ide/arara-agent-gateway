@@ -1,0 +1,16 @@
+.env
+.env.*
+!.env.example
+/data/
+/bin/
+/dist/
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.pem
+*.key
+coverage.out
+.DS_Store
+.idea/
+.vscode/
