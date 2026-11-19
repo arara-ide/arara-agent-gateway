@@ -8,7 +8,9 @@ case "$id" in
 esac
 mkdir -p /tmp/aag "$dir" || exit 65
 cd "$dir" || exit 65
-"$@" 0<&0 &
+exec 3<&0
+"$@" <&3 3<&- &
+exec 3<&-
 child=$!
 echo "$child" > "/tmp/aag/$id.pid"
 trap 'kill -TERM "$child" 2>/dev/null' TERM INT HUP

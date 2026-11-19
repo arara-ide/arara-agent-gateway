@@ -1,0 +1,38 @@
+services:
+  gateway:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: arara-agent-gateway:local
+    env_file: .env
+    environment:
+      DATA_DIR: /data
+      PORT: "3000"
+      DOCKER_SOCKET: /var/run/docker.sock
+    ports:
+      - "127.0.0.1:${GATEWAY_PORT:-3000}:3000"
+    volumes:
+      - gateway-data:/data
+      - /var/run/docker.sock:/var/run/docker.sock
+    group_add:
+      - "${DOCKER_GID:-0}"
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped
+    depends_on:
+      runtime:
+        condition: service_completed_successfully
+
+  runtime:
+    build:
+      context: .
+      dockerfile: runtime/Dockerfile
+    image: ${RUNTIME_IMAGE:-arara-agent-runtime:local}
+    command: ["true"]
+    restart: "no"
+
+volumes:
+  gateway-data:

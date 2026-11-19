@@ -97,7 +97,7 @@ func Load(getenv Getenv) (Config, error) {
 		ContainerPids:        int64(integer("CONTAINER_PIDS", 512, 64)),
 		ContainerRuntime:     str("CONTAINER_RUNTIME", ""),
 		ContainerNetwork:     str("CONTAINER_NETWORK", "aag-instances"),
-		RuntimeImage:         str("RUNTIME_IMAGE", "ghcr.io/arara-ide/arara-agent-runtime:latest"),
+		RuntimeImage:         str("RUNTIME_IMAGE", "arara-agent-runtime:local"),
 		DockerSocket:         str("DOCKER_SOCKET", "/var/run/docker.sock"),
 	}
 
