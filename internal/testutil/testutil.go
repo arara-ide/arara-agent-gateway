@@ -59,7 +59,7 @@ func Box(t testing.TB) *secret.Box {
 }
 
 func Settings(maxActive int) instance.Settings {
-	return instance.Settings{Image: Image, Network: "aag-test", Memory: 1 << 30, CPUs: 1, Pids: 256, MaxActive: maxActive}
+	return instance.Settings{Image: Image, Network: "aag-test", Memory: 1 << 30, CPUs: 1, Pids: 256, MaxActive: maxActive, Retention: 30}
 }
 
 type Env struct {

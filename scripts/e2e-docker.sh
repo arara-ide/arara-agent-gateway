@@ -106,6 +106,8 @@ jq -e '[.[0].Mounts[].Source] | map(select(test("docker.sock"))) | length == 0' 
 ok "container isolation flags"
 docker exec "aag-$A" sh -c 'test ! -e /var/run/docker.sock && ! touch /usr/x 2>/dev/null && touch ~/marker && whoami' | grep -qx agent || fail "in-container checks"
 ok "non-root user, read-only rootfs, writable home volume"
+docker exec "aag-$A" sh -c 'mkdir -p ~/.codex/sessions && touch -d "40 days ago" ~/.codex/sessions/old.jsonl && touch ~/.codex/sessions/new.jsonl'
+
 req POST "/instances/$A/start" "$INTEGRATION" e2e-user-a; expect 200 "start is idempotent"
 
 log "agents"
@@ -114,6 +116,7 @@ req GET "/instances/$A/agents" "$INTEGRATION" e2e-user-a; expect 200 "agent stat
 ok "fresh instance reports setup_required"
 req POST "/instances/$A/agents/claude/run" "$INTEGRATION" e2e-user-a '{"prompt":"hi"}'; expect 409 "claude run without login is rejected"
 [ "$(jq -r .error.code <<<"$BODY")" = agent_not_authenticated ] || fail "error code"
+if [ "${E2E_SKIP_PROVIDERS:-0}" != 1 ]; then
 req POST "/instances/$A/agents/claude/login" "$INTEGRATION" e2e-user-a; expect 202 "claude login starts"
 jq -e '.login.url | test("^https://")' <<<"$BODY" >/dev/null || fail "claude login url missing: $BODY"
 jq -e '.login.needs_input == true' <<<"$BODY" >/dev/null || fail "claude login should ask for a code"
@@ -170,6 +173,11 @@ sleep 3
 docker exec "aag-$A" sh -c 'ps -eo comm' | grep -Eq '^(claude|codex|agy)$' && fail "agent processes left running"
 ok "no agent processes left after parallel runs"
 
+else
+  echo "  skip provider network checks (E2E_SKIP_PROVIDERS=1)"
+  RUN="run_none"
+fi
+
 log "cross-user isolation"
 req POST /instances "$INTEGRATION" e2e-user-b '{}'; expect 201 "create second instance"
 B="$(jq -r .instance.id <<<"$BODY")"; CREATED="$A $B"
@@ -193,12 +201,18 @@ log "persistence across gateway restart"
 stop_gateway
 start_gateway
 req GET "/instances/$A/history" "$ADMIN" ""; expect 200 "history after restart"
-[ "$(jq -r '.runs | length' <<<"$BODY")" = 4 ] || fail "history lost"
+want_runs=4
+[ "${E2E_SKIP_PROVIDERS:-0}" = 1 ] && want_runs=0
+[ "$(jq -r '.runs | length' <<<"$BODY")" = "$want_runs" ] || fail "history lost"
 req GET /users/e2e-user-a/connections "$ADMIN" ""; expect 200 "connections after restart"
-[ "$(jq -r '.connections[] | select(.provider=="antigravity") | .method' <<<"$BODY")" = api_key ] || fail "connection lost"
+if [ "${E2E_SKIP_PROVIDERS:-0}" != 1 ]; then
+  [ "$(jq -r '.connections[] | select(.provider=="antigravity") | .method' <<<"$BODY")" = api_key ] || fail "connection lost"
+fi
 req POST "/instances/$A/start" "$ADMIN" ""; expect 200 "restart instance"
 docker exec "aag-$A" test -f /home/agent/marker || fail "volume content lost"
 ok "volume content survives stop and gateway restart"
+docker exec "aag-$A" sh -c 'test ! -e ~/.codex/sessions/old.jsonl && test -e ~/.codex/sessions/new.jsonl' || fail "session retention"
+ok "session files older than the retention are pruned on start"
 
 log "delete"
 req DELETE "/instances/$A" "$ADMIN" ""; expect 400 "delete requires confirmation"

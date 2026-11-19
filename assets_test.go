@@ -109,3 +109,25 @@ func TestEveryAPIErrorIsTranslated(t *testing.T) {
 		}
 	}
 }
+
+func TestOpenAPICoversEveryRoute(t *testing.T) {
+	src, err := fs.ReadFile(apiSources, "server.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	spec := string(OpenAPI)
+	for _, m := range regexp.MustCompile(`s\.handle\("([A-Z]+) ([^"]+)"`).FindAllStringSubmatch(string(src), -1) {
+		path, method := m[2], strings.ToLower(m[1])
+		idx := strings.Index(spec, "\n  "+path+":\n")
+		if idx < 0 {
+			t.Fatalf("route %s missing in docs/openapi.yaml", path)
+		}
+		block := spec[idx+1:]
+		if next := regexp.MustCompile(`\n  /api/`).FindStringIndex(block[1:]); next != nil {
+			block = block[:next[0]+1]
+		}
+		if !strings.Contains(block, "\n    "+method+":") {
+			t.Fatalf("method %s %s missing in docs/openapi.yaml", method, path)
+		}
+	}
+}

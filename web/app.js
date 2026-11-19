@@ -239,18 +239,23 @@ async function openDetail(id) {
   state.timer = setInterval(() => loadDetail(id, true), 15000);
 }
 
-async function loadDetail(id, quiet = false) {
+async function loadDetail(id, quiet = false, force = false) {
   const status = $('#detail-status');
   try {
     const data = await api('GET', `/instances/${id}/status`);
     state.instance = data.instance;
     renderInfo(data.instance);
-    renderConnections(data);
+    if (!quiet || force || !connectionsInUse()) renderConnections(data);
     await loadHistory(id);
     if (!quiet) status.textContent = '';
   } catch (err) {
     status.textContent = errorText(err);
   }
+}
+
+function connectionsInUse() {
+  const list = $('#connections');
+  return Boolean(list.querySelector('.login')) || list.contains(document.activeElement) || [...list.querySelectorAll('input')].some((i) => i.value);
 }
 
 function renderInfo(inst) {
@@ -323,7 +328,7 @@ function apiKeyForm(userId, agent) {
         await api('PUT', `/users/${encodeURIComponent(userId)}/agents/${agent}/api-key`, { api_key: input.value });
         input.value = '';
         $('#detail-status').textContent = t('status.keySaved');
-        loadDetail(state.instance.id, true);
+        loadDetail(state.instance.id, true, true);
       } catch (err) {
         $('#detail-status').textContent = errorText(err);
       }
@@ -341,7 +346,7 @@ async function removeKey(button, userId, agent) {
       $('#detail-status').textContent = errorText(err);
     }
   });
-  loadDetail(state.instance.id, true);
+  loadDetail(state.instance.id, true, true);
 }
 
 async function logout(button, id, agent) {
@@ -353,7 +358,7 @@ async function logout(button, id, agent) {
       $('#detail-status').textContent = errorText(err);
     }
   });
-  loadDetail(id, true);
+  loadDetail(id, true, true);
 }
 
 async function startLogin(button, id, agent, item) {
@@ -412,7 +417,7 @@ function pollLogin(box, id, agent, status) {
       const res = await api('GET', `/instances/${id}/agents/${agent}/login`);
       if (res.login.status === status) return pollLogin(box, id, agent, status);
       renderLogin(box, id, agent, res.login);
-      if (res.login.status === 'succeeded') loadDetail(id, true);
+      if (res.login.status === 'succeeded') loadDetail(id, true, true);
     } catch {}
   }, 3000);
 }

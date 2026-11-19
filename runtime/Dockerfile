@@ -30,7 +30,7 @@ RUN groupmod -n agent node \
  && printf 'cli_auth_credentials_store = "file"\n' > /home/agent/.codex/config.toml \
  && chown -R 1000:1000 /home/agent
 
-COPY runtime/bin/aag-run runtime/bin/aag-kill /usr/local/bin/
+COPY runtime/bin/aag-run runtime/bin/aag-kill runtime/bin/aag-prune /usr/local/bin/
 
 USER 1000:1000
 WORKDIR /home/agent

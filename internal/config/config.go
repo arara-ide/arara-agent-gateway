@@ -30,6 +30,7 @@ type Config struct {
 	MaxActiveInstances   int
 	MaxAgentsPerInstance int
 	RunTimeout           time.Duration
+	SessionRetentionDays int
 	ContainerMemory      int64
 	ContainerCPUs        float64
 	ContainerPids        int64
@@ -94,6 +95,7 @@ func Load(getenv Getenv) (Config, error) {
 		MaxActiveInstances:   integer("MAX_ACTIVE_INSTANCES", 10, 1),
 		MaxAgentsPerInstance: integer("MAX_AGENTS_PER_INSTANCE", 3, 1),
 		RunTimeout:           time.Duration(integer("RUN_TIMEOUT_SECONDS", 3600, 30)) * time.Second,
+		SessionRetentionDays: integer("SESSION_RETENTION_DAYS", 30, 1),
 		ContainerPids:        int64(integer("CONTAINER_PIDS", 512, 64)),
 		ContainerRuntime:     str("CONTAINER_RUNTIME", ""),
 		ContainerNetwork:     str("CONTAINER_NETWORK", "aag-instances"),

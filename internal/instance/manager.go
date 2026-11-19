@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strconv"
 	"sync"
 	"time"
 
@@ -38,6 +39,7 @@ type Settings struct {
 	CPUs      float64
 	Pids      int64
 	MaxActive int
+	Retention int
 }
 
 type Manager struct {
@@ -129,7 +131,20 @@ func (m *Manager) Start(ctx context.Context, id string) (store.Instance, error) 
 	if err := m.store.TouchInstance(ctx, id, now); err != nil {
 		return in, err
 	}
+	m.prune(id)
 	return m.store.GetInstance(ctx, id)
+}
+
+func (m *Manager) prune(id string) {
+	if m.settings.Retention <= 0 {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	cmd := []string{"aag-prune", strconv.Itoa(m.settings.Retention)}
+	if _, err := docker.Output(ctx, m.engine, docker.ExecSpec{Container: ContainerName(id), Cmd: cmd}, nil, 4096); err != nil {
+		m.log.Warn("session retention cleanup failed", "instance", id, "error", err)
+	}
 }
 
 func (m *Manager) reserveSlot(ctx context.Context, id string) error {

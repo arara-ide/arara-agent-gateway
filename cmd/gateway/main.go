@@ -75,7 +75,7 @@ func runMain() error {
 
 	instances := instance.NewManager(st, engine, instance.Settings{
 		Image: cfg.RuntimeImage, Network: cfg.ContainerNetwork, Runtime: cfg.ContainerRuntime,
-		Memory: cfg.ContainerMemory, CPUs: cfg.ContainerCPUs, Pids: cfg.ContainerPids, MaxActive: cfg.MaxActiveInstances,
+		Memory: cfg.ContainerMemory, CPUs: cfg.ContainerCPUs, Pids: cfg.ContainerPids, MaxActive: cfg.MaxActiveInstances, Retention: cfg.SessionRetentionDays,
 	}, nil, log)
 	conns := connect.New(st, box, instances, engine, nil, log)
 	gh := github.New(github.Config{ClientID: cfg.GitHubClientID, ClientSecret: cfg.GitHubClientSecret, RedirectURL: cfg.GitHubRedirectURL, Scopes: cfg.GitHubScopes}, st, box, nil, nil)

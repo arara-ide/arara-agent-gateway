@@ -51,6 +51,15 @@ func TestStartAppliesIsolationAndIsIdempotent(t *testing.T) {
 			t.Fatal("credential in container env")
 		}
 	}
+	pruned := false
+	for _, e := range env.Engine.ExecLog() {
+		if len(e.Cmd) == 2 && e.Cmd[0] == "aag-prune" && e.Cmd[1] == "30" {
+			pruned = true
+		}
+	}
+	if !pruned {
+		t.Fatal("session retention cleanup not run on start")
+	}
 	again, err := env.Instances.Start(context.Background(), in.ID)
 	if err != nil || again.State != store.StateRunning {
 		t.Fatalf("idempotent start: %v", err)

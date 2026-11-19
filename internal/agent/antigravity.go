@@ -81,7 +81,7 @@ func (p *antigravityParser) Line(line []byte) []Event {
 				p.text.WriteString(msg.Step.TextDelta)
 				return []Event{{Type: "delta", Text: msg.Step.TextDelta}}
 			}
-		case "user_input", "system_message", "":
+		case "user_input", "system_message", "error_message", "":
 		default:
 			if p.tools == nil {
 				p.tools = map[int]bool{}

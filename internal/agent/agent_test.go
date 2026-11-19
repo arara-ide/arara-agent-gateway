@@ -101,6 +101,7 @@ func TestAntigravityFailureAndTools(t *testing.T) {
 	p := Antigravity{}.NewParser()
 	tools := p.Line([]byte(`{"event":"step_update","step_update":{"step_index":2,"state":"ACTIVE","step_type":"run_command"}}`))
 	again := p.Line([]byte(`{"event":"step_update","step_update":{"step_index":2,"state":"DONE","step_type":"run_command"}}`))
+	again = append(again, p.Line([]byte(`{"event":"step_update","step_update":{"step_index":3,"state":"DONE","step_type":"error_message"}}`))...)
 	p.Line([]byte(`{"event":"result","result":{"conversation_id":"","status":"ERROR","response":"","error":"API key not valid"}}`))
 	out := p.Outcome()
 	if len(tools) != 1 || len(again) != 0 || !out.Failed || !out.AuthError {

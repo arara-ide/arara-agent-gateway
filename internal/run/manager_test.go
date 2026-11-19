@@ -244,8 +244,8 @@ func TestAuthFailureDuringRunMarksConnection(t *testing.T) {
 		t.Fatalf("final %+v", final)
 	}
 	c := f.conn.Connection(context.Background(), in.UserID, "claude")
-	if c.Status != store.ConnExpired {
-		t.Fatalf("connection %s", c.Status)
+	if c.Status != store.ConnError || c.Method != "api_key" {
+		t.Fatalf("connection %s %s", c.Status, c.Method)
 	}
 }
 

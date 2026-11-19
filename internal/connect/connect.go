@@ -158,15 +158,19 @@ func (s *Service) Probe(ctx context.Context, in store.Instance, a agent.Adapter)
 }
 
 func (s *Service) MarkAuthFailure(ctx context.Context, userID, name, method string) {
-	status := store.ConnExpired
 	c := s.Connection(ctx, userID, name)
-	if c.Status != store.ConnConnected {
-		status = store.ConnSetupRequired
-	}
-	c.Status, c.Error, c.UpdatedAt = status, "authentication failed during a run", s.now().UTC()
 	if c.Method == "" {
 		c.Method = method
 	}
+	switch {
+	case c.Method == agent.MethodAPIKey:
+		c.Status, c.Error = store.ConnError, "api key rejected by the provider"
+	case c.Status == store.ConnConnected:
+		c.Status, c.Error = store.ConnExpired, "authentication failed during a run"
+	default:
+		c.Status, c.Error = store.ConnSetupRequired, "authentication failed during a run"
+	}
+	c.UpdatedAt = s.now().UTC()
 	_ = s.store.UpsertConnection(ctx, c)
 }
 
