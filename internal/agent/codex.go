@@ -2,6 +2,7 @@ package agent
 
 import (
 	"encoding/json"
+	"net/url"
 	"strings"
 )
 
@@ -43,7 +44,12 @@ func (Codex) ParseStatus(exitCode int, stdout string) (bool, string) {
 }
 
 func (Codex) Login() *Login {
-	return &Login{Args: []string{"codex", "login", "--device-auth"}}
+	return &Login{
+		Args: []string{"codex", "login", "--device-auth"}, Tty: true,
+		AuthorizeURL: func(u *url.URL) bool {
+			return u.Hostname() == "auth.openai.com" && u.Path == "/codex/device"
+		},
+	}
 }
 
 func (Codex) Logout() *Logout { return &Logout{Args: []string{"codex", "logout"}} }

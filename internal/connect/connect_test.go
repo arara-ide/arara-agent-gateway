@@ -16,10 +16,11 @@ import (
 )
 
 type loginCLI struct {
-	mu          sync.Mutex
-	loggedIn    bool
-	agyLoggedIn bool
-	gotCode     string
+	mu            sync.Mutex
+	loggedIn      bool
+	agyLoggedIn   bool
+	codexLoggedIn bool
+	gotCode       string
 }
 
 func (c *loginCLI) handler(e *fakedocker.Exec) int {
@@ -37,12 +38,24 @@ func (c *loginCLI) handler(e *fakedocker.Exec) int {
 		c.loggedIn = line == "secret-code\r"
 		c.mu.Unlock()
 		return 0
-	case cmd[0] == "codex" && cmd[1] == "login" && len(cmd) > 2:
+	case cmd[0] == "codex" && cmd[1] == "login" && len(cmd) > 2 && cmd[2] == "--device-auth":
 		fmt.Fprint(e.Stdout, "Open https://auth.openai.com/codex/device and enter WXYZ-12345\n")
+		c.mu.Lock()
+		loggedIn := c.codexLoggedIn
+		c.mu.Unlock()
+		if loggedIn {
+			return 0
+		}
 		<-e.Killed
 		return 143
 	case cmd[0] == "codex":
-		fmt.Fprintln(e.Stdout, "Not logged in")
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		if c.codexLoggedIn {
+			fmt.Fprintln(e.Stderr, "Logged in using ChatGPT")
+			return 0
+		}
+		fmt.Fprintln(e.Stderr, "Not logged in")
 		return 1
 	case cmd[0] == "agy" && len(cmd) > 1 && cmd[len(cmd)-1] == "models":
 		c.mu.Lock()
@@ -118,6 +131,12 @@ func TestClaudeAccountLogin(t *testing.T) {
 	}
 	if env.Instances.Busy(in.ID) != 1 {
 		t.Fatal("login must keep the instance busy")
+	}
+	if _, err := svc.SetAPIKey(context.Background(), in.ID, "claude", "fake-api-key"); !errors.Is(err, connect.ErrLoginInProgress) {
+		t.Fatal("API key operation was allowed during account login")
+	}
+	if _, err := svc.Logout(context.Background(), in, "claude"); !errors.Is(err, connect.ErrLoginInProgress) {
+		t.Fatal("logout was allowed during account login")
 	}
 	if _, err := svc.SendLoginInput(in.ID, "claude", "bad code\nrm -rf"); !errors.Is(err, connect.ErrInvalidInput) {
 		t.Fatalf("multi-line input accepted: %v", err)
@@ -216,5 +235,22 @@ func TestLoginRequiresRunningInstance(t *testing.T) {
 	in, _ := env.Instances.Create(context.Background(), "one")
 	if _, err := svc.StartLogin(context.Background(), in, "claude"); err == nil {
 		t.Fatal("login on stopped instance")
+	}
+}
+
+func TestCodexAccountLoginReadsStatusFromStderr(t *testing.T) {
+	svc, _, cli, in := setup(t)
+	cli.mu.Lock()
+	cli.codexLoggedIn = true
+	cli.mu.Unlock()
+	if _, err := svc.StartLogin(context.Background(), in, "codex"); err != nil {
+		t.Fatal(err)
+	}
+	l := waitStatus(t, svc, in, "codex", connect.LoginSucceeded)
+	if l.URL != "" || l.Code != "" {
+		t.Fatal("completed login retained the device challenge")
+	}
+	if conn := svc.Connection(context.Background(), in.ID, "codex"); conn.Account != "ChatGPT" {
+		t.Fatalf("unexpected Codex account status %s", conn.Status)
 	}
 }

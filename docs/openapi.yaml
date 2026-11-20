@@ -224,6 +224,7 @@ paths:
     put:
       tags: [agents]
       summary: Store a provider API key for this instance (encrypted; injected only during runs)
+      description: Returns `409 login_in_progress` during an account sign-in.
       requestBody:
         required: true
         content:
@@ -245,9 +246,11 @@ paths:
                   connection: { $ref: "#/components/schemas/Connection" }
         "400": { $ref: "#/components/responses/Error" }
         "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
     delete:
       tags: [agents]
       summary: Remove the stored API key
+      description: Returns `409 login_in_progress` during an account sign-in.
       responses:
         "200":
           description: Removed
@@ -258,6 +261,7 @@ paths:
                 properties:
                   connection: { $ref: "#/components/schemas/Connection" }
         "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
   /api/instances/{id}/agents/{agent}/run:
     parameters:
       - { $ref: "#/components/parameters/InstanceId" }
@@ -366,13 +370,14 @@ paths:
         "404": { $ref: "#/components/responses/Error" }
     delete:
       tags: [agents]
-      summary: Cancel the login session
+      summary: Cancel the login session before the account code is submitted
       responses:
         "200":
           description: Cancelled
           content:
             application/json:
               schema: { $ref: "#/components/schemas/LoginResponse" }
+        "409": { $ref: "#/components/responses/Error" }
   /api/instances/{id}/agents/{agent}/login/input:
     parameters:
       - { $ref: "#/components/parameters/InstanceId" }
@@ -405,6 +410,7 @@ paths:
     post:
       tags: [agents]
       summary: Sign the CLI account out inside the instance
+      description: Returns `409 login_in_progress` during an account sign-in.
       responses:
         "200":
           description: Signed out

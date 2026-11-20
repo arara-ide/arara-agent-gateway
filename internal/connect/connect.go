@@ -23,7 +23,7 @@ const (
 	maxAPIKeyLen   = 512
 )
 
-var loginProbeInterval = 2 * time.Second
+var loginProbeInterval = 500 * time.Millisecond
 
 var (
 	ErrUnknownAgent      = errors.New("unknown agent")
@@ -32,24 +32,26 @@ var (
 	ErrInvalidInput      = errors.New("invalid login input")
 	ErrLoginNotFound     = errors.New("login session not found")
 	ErrLoginNoInput      = errors.New("this login does not accept input")
+	ErrLoginInProgress   = errors.New("agent login is in progress")
 )
 
 type Service struct {
-	store  *store.Store
-	box    *secret.Box
-	inst   *instance.Manager
-	engine docker.Engine
-	now    func() time.Time
-	log    *slog.Logger
-	mu     sync.Mutex
-	logins map[string]*loginSession
+	store    *store.Store
+	box      *secret.Box
+	inst     *instance.Manager
+	engine   docker.Engine
+	now      func() time.Time
+	log      *slog.Logger
+	mu       sync.Mutex
+	logins   map[string]*loginSession
+	changing map[string]bool
 }
 
 func New(s *store.Store, box *secret.Box, inst *instance.Manager, engine docker.Engine, now func() time.Time, log *slog.Logger) *Service {
 	if now == nil {
 		now = time.Now
 	}
-	return &Service{store: s, box: box, inst: inst, engine: engine, now: now, log: log, logins: map[string]*loginSession{}}
+	return &Service{store: s, box: box, inst: inst, engine: engine, now: now, log: log, logins: map[string]*loginSession{}, changing: map[string]bool{}}
 }
 
 func secretAD(instanceID, provider string) string { return "connection:" + provider + ":" + instanceID }
@@ -76,6 +78,11 @@ func (s *Service) SetAPIKey(ctx context.Context, instanceID, name, key string) (
 	if len(key) < 8 || len(key) > maxAPIKeyLen || strings.ContainsAny(key, " \t\r\n\x00") {
 		return store.Connection{}, ErrInvalidAPIKey
 	}
+	finish, err := s.beginChange(loginKey(instanceID, name))
+	if err != nil {
+		return store.Connection{}, err
+	}
+	defer finish()
 	sealed, err := s.box.Seal([]byte(key), secretAD(instanceID, name))
 	if err != nil {
 		return store.Connection{}, err
@@ -88,6 +95,11 @@ func (s *Service) RemoveAPIKey(ctx context.Context, instanceID, name string) (st
 	if _, ok := agent.Get(name); !ok {
 		return store.Connection{}, ErrUnknownAgent
 	}
+	finish, err := s.beginChange(loginKey(instanceID, name))
+	if err != nil {
+		return store.Connection{}, err
+	}
+	defer finish()
 	c := store.Connection{InstanceID: instanceID, Provider: name, Status: store.ConnDisconnected, UpdatedAt: s.now().UTC()}
 	return c, s.store.UpsertConnection(ctx, c)
 }
@@ -149,8 +161,19 @@ func (s *Service) Credentials(ctx context.Context, instanceID string, a agent.Ad
 }
 
 func (s *Service) Probe(ctx context.Context, in store.Instance, a agent.Adapter) store.Connection {
+	return s.probe(ctx, in, a, nil)
+}
+
+func (s *Service) probe(ctx context.Context, in store.Instance, a agent.Adapter, login *loginSession) store.Connection {
+	key := loginKey(in.ID, a.Name())
+	s.mu.Lock()
 	current := s.Connection(ctx, in.ID, a.Name())
-	if current.Method == agent.MethodAPIKey && current.Secret != "" {
+	blocked := s.changing[key] || (s.logins[key] != login && s.logins[key].active())
+	s.mu.Unlock()
+	if blocked {
+		return current
+	}
+	if login == nil && current.Method == agent.MethodAPIKey && current.Secret != "" {
 		return current
 	}
 	if a.StatusArgs() == nil || in.State != store.StateRunning {
@@ -164,6 +187,9 @@ func (s *Service) Probe(ctx context.Context, in store.Instance, a agent.Adapter)
 		return current
 	}
 	ok, account := a.ParseStatus(res.ExitCode, res.Stdout)
+	if !ok && res.Stderr != "" {
+		ok, account = a.ParseStatus(res.ExitCode, res.Stderr)
+	}
 	next := store.Connection{InstanceID: in.ID, Provider: a.Name(), Method: agent.MethodAccount, UpdatedAt: s.now().UTC()}
 	switch {
 	case ok:
@@ -171,11 +197,21 @@ func (s *Service) Probe(ctx context.Context, in store.Instance, a agent.Adapter)
 	case current.Status == store.ConnConnected && current.Method == agent.MethodAccount:
 		next.Status = store.ConnExpired
 	default:
+		if login != nil && current.Method == agent.MethodAPIKey {
+			return current
+		}
 		next.Status = store.ConnSetupRequired
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	latest := s.Connection(ctx, in.ID, a.Name())
+	if s.changing[key] || (s.logins[key] != login && s.logins[key].active()) || latest != current {
+		return latest
 	}
 	if next.Status != current.Status || next.Account != current.Account || next.Method != current.Method {
 		if err := s.store.UpsertConnection(ctx, next); err != nil {
-			s.log.Warn("save connection failed", "error", err)
+			s.log.Warn("save connection failed")
+			return current
 		}
 	}
 	return next
@@ -207,6 +243,11 @@ func (s *Service) Logout(ctx context.Context, in store.Instance, name string) (s
 	if spec == nil {
 		return store.Connection{}, ErrMethodUnsupported
 	}
+	finish, err := s.beginChange(loginKey(in.ID, name))
+	if err != nil {
+		return store.Connection{}, err
+	}
+	defer finish()
 	release, err := s.inst.Acquire(ctx, in.ID)
 	if err != nil {
 		return store.Connection{}, err
@@ -306,6 +347,7 @@ type loginSession struct {
 	cancel            context.CancelFunc
 	inputSent         bool
 	inputNotify       chan struct{}
+	done              chan struct{}
 	cancelledByUser   bool
 	failedByOutput    bool
 	succeededByOutput bool
@@ -319,7 +361,33 @@ func (l *loginSession) snapshot() Login {
 	return v
 }
 
+func (l *loginSession) active() bool {
+	if l == nil {
+		return false
+	}
+	select {
+	case <-l.done:
+		return false
+	default:
+		return true
+	}
+}
+
 func loginKey(instanceID, name string) string { return instanceID + "/" + name }
+
+func (s *Service) beginChange(key string) (func(), error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.changing[key] || s.logins[key].active() {
+		return nil, ErrLoginInProgress
+	}
+	s.changing[key] = true
+	return func() {
+		s.mu.Lock()
+		delete(s.changing, key)
+		s.mu.Unlock()
+	}, nil
+}
 
 func (s *Service) StartLogin(ctx context.Context, in store.Instance, name string) (Login, error) {
 	a, ok := agent.Get(name)
@@ -334,15 +402,21 @@ func (s *Service) StartLogin(ctx context.Context, in store.Instance, name string
 	s.mu.Lock()
 	if existing, ok := s.logins[key]; ok {
 		snap := existing.snapshot()
-		if snap.Status == LoginStarting || snap.Status == LoginWaiting {
+		if existing.active() {
 			s.mu.Unlock()
 			return snap, nil
 		}
 	}
 	s.mu.Unlock()
 
+	finish, err := s.beginChange(key)
+	if err != nil {
+		return Login{}, err
+	}
+
 	release, err := s.inst.Acquire(ctx, in.ID)
 	if err != nil {
+		finish()
 		return Login{}, err
 	}
 	lctx, cancel := context.WithTimeout(context.Background(), loginTimeout)
@@ -352,6 +426,7 @@ func (s *Service) StartLogin(ctx context.Context, in store.Instance, name string
 	if err != nil {
 		cancel()
 		release()
+		finish()
 		return Login{}, err
 	}
 	l := &loginSession{
@@ -359,10 +434,12 @@ func (s *Service) StartLogin(ctx context.Context, in store.Instance, name string
 		proc:        proc,
 		cancel:      cancel,
 		inputNotify: make(chan struct{}),
+		done:        make(chan struct{}),
 	}
 	s.mu.Lock()
 	s.logins[key] = l
 	s.mu.Unlock()
+	finish()
 
 	ready := make(chan struct{})
 	go s.watchLogin(lctx, in, a, spec, l, release, ready)
@@ -375,6 +452,7 @@ func (s *Service) StartLogin(ctx context.Context, in store.Instance, name string
 }
 
 func (s *Service) watchLogin(ctx context.Context, in store.Instance, a agent.Adapter, spec *agent.Login, l *loginSession, release func(), ready chan struct{}) {
+	defer close(l.done)
 	defer release()
 	defer l.cancel()
 	defer l.proc.Close()
@@ -411,9 +489,9 @@ func (s *Service) watchLogin(ctx context.Context, in store.Instance, a agent.Ada
 					return
 				case <-ticker.C:
 					pctx, pcancel := context.WithTimeout(ctx, statusTimeout)
-					conn := s.Probe(pctx, in, a)
+					conn := s.probe(pctx, in, a, l)
 					pcancel()
-					if conn.Status == store.ConnConnected {
+					if conn.Status == store.ConnConnected && conn.Method == agent.MethodAccount {
 						l.mu.Lock()
 						l.succeededByOutput = true
 						l.mu.Unlock()
@@ -442,10 +520,10 @@ func (s *Service) watchLogin(ctx context.Context, in store.Instance, a agent.Ada
 				}
 			}
 			l.mu.Lock()
-			if l.URL == "" {
-				l.URL = agent.FindURL(text, "oauth", "authorize", "device", "auth.openai.com", "claude.ai", "claude.com", "accounts.google.com")
+			if l.URL == "" && l.Status == LoginStarting {
+				l.URL = spec.FindAuthorizeURL(text)
 			}
-			if l.Code == "" && !l.NeedsInput {
+			if l.Code == "" && !l.NeedsInput && l.Status == LoginStarting {
 				l.Code = agent.FindDeviceCode(text)
 			}
 			if l.URL != "" && l.Status == LoginStarting && (l.NeedsInput || l.Code != "") {
@@ -468,7 +546,7 @@ func (s *Service) watchLogin(ctx context.Context, in store.Instance, a agent.Ada
 		}
 		if err != nil {
 			if !errors.Is(err, io.EOF) {
-				s.log.Debug("login stream closed", "error", err)
+				s.log.Debug("login stream closed", "agent", a.Name())
 			}
 			break
 		}
@@ -485,7 +563,7 @@ func (s *Service) watchLogin(ctx context.Context, in store.Instance, a agent.Ada
 
 	var conn store.Connection
 	if !cancelled && !failedOut {
-		conn = s.Probe(probeCtx, in, a)
+		conn = s.probe(probeCtx, in, a, l)
 	}
 	l.mu.Lock()
 	switch {
@@ -494,7 +572,7 @@ func (s *Service) watchLogin(ctx context.Context, in store.Instance, a agent.Ada
 	case failedOut:
 		l.Status = LoginFailed
 		l.Error = "login_failed"
-	case conn.Status == store.ConnConnected:
+	case conn.Status == store.ConnConnected && conn.Method == agent.MethodAccount:
 		l.Status = LoginSucceeded
 	default:
 		l.Status = LoginFailed
@@ -506,7 +584,11 @@ func (s *Service) watchLogin(ctx context.Context, in store.Instance, a agent.Ada
 			l.Error = "not_authenticated"
 		}
 	}
+	l.URL, l.Code = "", ""
+	result := l.Status
+	reason := l.Error
 	l.mu.Unlock()
+	s.log.Info("agent login finished", "agent", a.Name(), "status", result, "reason", reason, "exit_code", code)
 	signal()
 }
 
@@ -536,13 +618,18 @@ func (s *Service) SendLoginInput(instanceID, name, code string) (Login, error) {
 		l.mu.Unlock()
 		return Login{}, ErrLoginNoInput
 	}
-	l.inputSent = true
-	notify := l.inputNotify
-	l.mu.Unlock()
 	if _, err := l.proc.Write([]byte(code + "\r")); err != nil {
+		l.mu.Unlock()
 		return Login{}, err
 	}
-	close(notify)
+	l.inputSent = true
+	l.URL = ""
+	close(l.inputNotify)
+	l.mu.Unlock()
+	select {
+	case <-l.done:
+	case <-time.After(2 * time.Second):
+	}
 	return l.snapshot(), nil
 }
 
@@ -554,6 +641,10 @@ func (s *Service) CancelLogin(instanceID, name string) (Login, error) {
 		return Login{}, ErrLoginNotFound
 	}
 	l.mu.Lock()
+	if l.inputSent && (l.Status == LoginStarting || l.Status == LoginWaiting) {
+		l.mu.Unlock()
+		return Login{}, ErrLoginInProgress
+	}
 	if l.Status == LoginStarting || l.Status == LoginWaiting {
 		l.Status = LoginCancelled
 		l.cancelledByUser = true

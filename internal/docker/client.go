@@ -246,7 +246,11 @@ func (c *Client) Exec(ctx context.Context, spec ExecSpec) (Process, error) {
 	if err != nil {
 		return nil, err
 	}
-	payload, _ := json.Marshal(map[string]any{"Detach": false, "Tty": spec.Tty})
+	start := map[string]any{"Detach": false, "Tty": spec.Tty}
+	if spec.Tty {
+		start["ConsoleSize"] = create["ConsoleSize"]
+	}
+	payload, _ := json.Marshal(start)
 	req := fmt.Sprintf("POST %s/exec/%s/start HTTP/1.1\r\nHost: docker\r\nContent-Type: application/json\r\nConnection: Upgrade\r\nUpgrade: tcp\r\nContent-Length: %d\r\n\r\n", apiVersion, created.Id, len(payload))
 	if _, err := conn.Write(append([]byte(req), payload...)); err != nil {
 		conn.Close()

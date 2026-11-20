@@ -2,6 +2,7 @@ package agent
 
 import (
 	"encoding/json"
+	"net/url"
 	"strings"
 )
 
@@ -44,7 +45,13 @@ func (Claude) ParseStatus(_ int, stdout string) (bool, string) {
 }
 
 func (Claude) Login() *Login {
-	return &Login{Args: []string{"claude", "auth", "login", "--claudeai"}, Tty: true, NeedsInput: true}
+	return &Login{
+		Args: []string{"claude", "auth", "login", "--claudeai"}, Tty: true, NeedsInput: true,
+		AuthorizeURL: func(u *url.URL) bool {
+			return (u.Hostname() == "claude.com" || u.Hostname() == "claude.ai") &&
+				strings.HasSuffix(u.Path, "/oauth/authorize") && u.Query().Get("state") != ""
+		},
+	}
 }
 
 func (Claude) Logout() *Logout { return &Logout{Args: []string{"claude", "auth", "logout"}} }

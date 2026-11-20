@@ -108,8 +108,8 @@ A instância precisa estar ligada.
    ```
 2. Mostre `url` como link para o usuário abrir no navegador dele. Se houver `code`, mostre-o (Codex).
 3. Se `needs_input` for `true` (Claude Code e Google Antigravity), mostre um campo para o código exibido depois do login e envie com `POST …/login/input` `{ "code": "…" }`. O campo aceita uma linha só, sem espaços. Nada além disso chega ao terminal.
-4. Consulte `GET …/login` a cada 3 segundos até `status` virar `succeeded`, `failed` ou `cancelled`. Em `failed`, `error` vale `login_timeout`, `login_failed` ou `not_authenticated`.
-5. Para cancelar, use `DELETE …/login`. Para sair da conta, use `POST …/logout`.
+4. Se o envio do código ainda devolver uma sessão pendente ou se usar o código de dispositivo, consulte `GET …/login` até `status` virar `succeeded`, `failed` ou `cancelled`. Em `failed`, `error` vale `login_timeout`, `login_failed` ou `not_authenticated`. A sessão concluída descarta URL e código.
+5. Para cancelar, use `DELETE …/login`. Para sair da conta, use `POST …/logout`. Durante o login, alterar a chave ou sair da conta devolve `409 login_in_progress`. Depois de enviar um código, o cancelamento do login também devolve esse erro até o resultado.
 
 A sessão de login dura até 10 minutos e mantém a instância ligada enquanto estiver aberta.
 

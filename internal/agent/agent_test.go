@@ -155,18 +155,18 @@ func TestStatusParsing(t *testing.T) {
 
 func TestLoginOutputExtraction(t *testing.T) {
 	claudeOut := "\x1b[2mBrowser didn't open? Use the url below to sign in (c to copy)\x1b[0m\r\n\r\nhttps://claude.com/cai/oauth/authorize?code=true&client_id=abc&state=xyz\r\n\r\nPaste code here if prompted >"
-	if u := FindURL(claudeOut, "oauth", "authorize"); u != "https://claude.com/cai/oauth/authorize?code=true&client_id=abc&state=xyz" {
+	if u := (Claude{}).Login().FindAuthorizeURL(claudeOut); u != "https://claude.com/cai/oauth/authorize?code=true&client_id=abc&state=xyz" {
 		t.Fatalf("claude url %q", u)
 	}
 	codexOut := "Follow these steps to sign in with ChatGPT using device code authorization:\n\n1. Open this link in your browser and sign in to your account\n   \x1b[94mhttps://auth.openai.com/codex/device\x1b[0m\n\n2. Enter this one-time code \x1b[90m(expires in 15 minutes)\x1b[0m\n   \x1b[94mABCD-12EFG\x1b[0m\n"
-	if u := FindURL(codexOut, "auth.openai.com"); u != "https://auth.openai.com/codex/device" {
+	if u := (Codex{}).Login().FindAuthorizeURL(codexOut); u != "https://auth.openai.com/codex/device" {
 		t.Fatalf("codex url %q", u)
 	}
 	if c := FindDeviceCode(codexOut); c != "ABCD-12EFG" {
 		t.Fatalf("codex code %q", c)
 	}
 	agyOut := "Open the URL below in your browser:\nhttps://accounts.google.com/o/oauth2/auth?access_type=offline&client_id=123&redirect_uri=https%3A%2F%2Fantigravity.google%2Foauth-callback&response_type=code&state=abc\nAfter authenticating, copy the code displayed in the browser and paste it below:\n"
-	if u := FindURL(agyOut, "oauth", "accounts.google.com"); u != "https://accounts.google.com/o/oauth2/auth?access_type=offline&client_id=123&redirect_uri=https%3A%2F%2Fantigravity.google%2Foauth-callback&response_type=code&state=abc" {
+	if u := (Antigravity{}).Login().FindAuthorizeURL(agyOut); u != "https://accounts.google.com/o/oauth2/auth?access_type=offline&client_id=123&redirect_uri=https%3A%2F%2Fantigravity.google%2Foauth-callback&response_type=code&state=abc" {
 		t.Fatalf("antigravity url %q", u)
 	}
 }
@@ -187,5 +187,20 @@ func TestValidation(t *testing.T) {
 	}
 	if len(Names()) != 3 {
 		t.Fatalf("agents %v", Names())
+	}
+}
+
+func TestGoogleLoginUsesCompleteTerminalHyperlink(t *testing.T) {
+	spec := (Antigravity{}).Login()
+	short := "https://accounts.google.com/o/oauth2/auth?client_id=123"
+	full := short + "&redirect_uri=https%3A%2F%2Fexample.test&response_type=code&state=abc"
+	if got := spec.FindAuthorizeURL(short + "\r\n" + full); got != "" {
+		t.Fatal("incomplete authorization link was exposed")
+	}
+	if got := spec.FindAuthorizeURL("\x1b]8;;" + full + "\x1b\\" + short + "\r\n"); got != full {
+		t.Fatal("complete hyperlink was not recovered")
+	}
+	if got := spec.FindAuthorizeURL("https://example.test/?redirect=" + full + "\n"); got != "" {
+		t.Fatal("non-provider link was accepted")
 	}
 }

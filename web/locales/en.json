@@ -118,6 +118,7 @@
   "error.invalid_api_key": "The API key format is invalid.",
   "error.invalid_login_input": "Invalid code.",
   "error.login_not_found": "No sign-in in progress.",
+  "error.login_in_progress": "Wait for the current agent sign-in to finish.",
   "error.login_input_not_expected": "The sign-in is not waiting for a code.",
   "error.github_not_configured": "GitHub integration is not configured.",
   "error.github_not_connected": "Connect GitHub first.",
