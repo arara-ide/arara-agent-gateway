@@ -160,6 +160,8 @@ func (s *Server) routes() {
 	s.handle("GET /api/instances/{id}/connections", s.instanceConnections)
 
 	s.handle("GET /api/instances/{id}/agents", s.instanceAgents)
+	s.handle("GET /api/instances/{id}/agents/{agent}/models", s.listAgentModels)
+	s.handle("GET /api/instances/{id}/agents/{agent}/usage", s.agentUsage)
 	s.handle("PUT /api/instances/{id}/agents/{agent}/api-key", s.setAPIKey)
 	s.handle("DELETE /api/instances/{id}/agents/{agent}/api-key", s.removeAPIKey)
 	s.handle("POST /api/instances/{id}/agents/{agent}/run", s.startRun)

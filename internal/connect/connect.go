@@ -2,6 +2,7 @@ package connect
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"log/slog"
@@ -162,6 +163,65 @@ func (s *Service) Credentials(ctx context.Context, instanceID string, a agent.Ad
 
 func (s *Service) Probe(ctx context.Context, in store.Instance, a agent.Adapter) store.Connection {
 	return s.probe(ctx, in, a, nil)
+}
+
+func (s *Service) ListModels(ctx context.Context, in store.Instance, name string) ([]agent.Model, error) {
+	a, stdout, err := s.query(ctx, in, name, agent.Adapter.ModelsCommand)
+	if err != nil || stdout == nil {
+		return []agent.Model{}, err
+	}
+	models := a.ParseModels(*stdout)
+	if models == nil {
+		return []agent.Model{}, nil
+	}
+	return models, nil
+}
+
+func (s *Service) Usage(ctx context.Context, in store.Instance, name string) (json.RawMessage, error) {
+	if _, ok := agent.Get(name); ok && in.State == store.StateRunning && s.Connection(ctx, in.ID, name).Status != store.ConnConnected {
+		return nil, nil
+	}
+	a, stdout, err := s.query(ctx, in, name, agent.Adapter.UsageCommand)
+	if err != nil || stdout == nil {
+		return nil, err
+	}
+	return a.ParseUsage(*stdout), nil
+}
+
+func (s *Service) query(ctx context.Context, in store.Instance, name string, command func(agent.Adapter) *agent.ModelsCommand) (agent.Adapter, *string, error) {
+	a, ok := agent.Get(name)
+	if !ok {
+		return nil, nil, ErrUnknownAgent
+	}
+	if in.State != store.StateRunning {
+		return nil, nil, instance.ErrNotRunning
+	}
+	spec := command(a)
+	if spec == nil {
+		return a, nil, nil
+	}
+	creds, err := s.Credentials(ctx, in.ID, a)
+	if err != nil {
+		return nil, nil, err
+	}
+	release, err := s.inst.Acquire(ctx, in.ID)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer release()
+	pctx, cancel := context.WithTimeout(ctx, statusTimeout)
+	defer cancel()
+	res, err := docker.Output(pctx, s.engine, docker.ExecSpec{
+		Container: instance.ContainerName(in.ID),
+		Cmd:       spec.Args,
+		WorkDir:   instance.HomeDir,
+		Env:       creds.Env,
+		Stdin:     len(spec.Stdin) > 0,
+	}, spec.Stdin, 4<<20)
+	if err != nil {
+		return nil, nil, err
+	}
+	return a, &res.Stdout, nil
 }
 
 func (s *Service) probe(ctx context.Context, in store.Instance, a agent.Adapter, login *loginSession) store.Connection {

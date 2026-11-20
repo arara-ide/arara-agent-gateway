@@ -256,6 +256,32 @@ func (s *Server) history(w http.ResponseWriter, r *http.Request) error {
 	return nil
 }
 
+func (s *Server) listAgentModels(w http.ResponseWriter, r *http.Request) error {
+	in, err := s.instanceParam(r)
+	if err != nil {
+		return err
+	}
+	models, err := s.Connections.ListModels(r.Context(), in, r.PathValue("agent"))
+	if err != nil {
+		return err
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"models": models})
+	return nil
+}
+
+func (s *Server) agentUsage(w http.ResponseWriter, r *http.Request) error {
+	in, err := s.instanceParam(r)
+	if err != nil {
+		return err
+	}
+	usage, err := s.Connections.Usage(r.Context(), in, r.PathValue("agent"))
+	if err != nil {
+		return err
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"usage": usage})
+	return nil
+}
+
 func (s *Server) startRun(w http.ResponseWriter, r *http.Request) error {
 	in, err := s.instanceParam(r)
 	if err != nil {
@@ -265,6 +291,7 @@ func (s *Server) startRun(w http.ResponseWriter, r *http.Request) error {
 		Prompt    string `json:"prompt"`
 		SessionID string `json:"session_id"`
 		Model     string `json:"model"`
+		Effort    string `json:"effort"`
 		Repo      string `json:"repo"`
 	}
 	if err := decode(r, &body); err != nil {
@@ -273,7 +300,7 @@ func (s *Server) startRun(w http.ResponseWriter, r *http.Request) error {
 	if _, ok := agent.Get(r.PathValue("agent")); !ok {
 		return run.ErrUnknownAgent
 	}
-	if err := run.Validate(run.Request{Prompt: body.Prompt, SessionID: body.SessionID, Model: body.Model}); err != nil {
+	if err := run.Validate(run.Request{Prompt: body.Prompt, SessionID: body.SessionID, Model: body.Model, Effort: body.Effort}); err != nil {
 		return err
 	}
 	if body.Repo != "" {
@@ -287,7 +314,7 @@ func (s *Server) startRun(w http.ResponseWriter, r *http.Request) error {
 			return err
 		}
 	}
-	rr, err := s.Runs.Start(ctx, in, r.PathValue("agent"), run.Request{Prompt: body.Prompt, SessionID: body.SessionID, Model: body.Model, Repo: body.Repo})
+	rr, err := s.Runs.Start(ctx, in, r.PathValue("agent"), run.Request{Prompt: body.Prompt, SessionID: body.SessionID, Model: body.Model, Effort: body.Effort, Repo: body.Repo})
 	if err != nil {
 		return err
 	}

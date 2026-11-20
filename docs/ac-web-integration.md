@@ -164,6 +164,7 @@ POST /api/instances/{id}/agents/{agent}/run
 | `status` | `{ "run_id", "agent", "status": "running" }` |
 | `session` | `{ "type": "session", "session_id" }` |
 | `delta` | `{ "type": "delta", "text" }` (texto incremental da resposta) |
+| `reasoning` | `{ "type": "reasoning", "text" }` (raciocínio incremental; Claude Code e Codex) |
 | `tool` | `{ "type": "tool", "tool", "detail" }` (comando, arquivo ou ferramenta usada) |
 | `done` | o `Run` final (`status`, `response`, `error_code`, `error_message`, `session_id`, `duration_ms`) |
 
@@ -218,3 +219,16 @@ Formato único:
 - [ ] Página de retorno do GitHub (`GITHUB_REDIRECT_URL`) que chama `POST /api/instances/{id}/github/callback` para a instância do usuário da sessão.
 - [ ] Tradução dos `error.code`, estados de instância, conexão e execução nos 3 idiomas.
 - [ ] Confirmação explícita antes de excluir a instância.
+
+## Limites de uso dos agentes
+
+`GET /api/instances/{id}/agents/{agent}/usage` consulta o CLI dentro da instância ligada, sem enviar prompt nem gastar tokens, e devolve `{ "usage": <payload cru do provedor> | null }`:
+
+| Agente | Origem do payload |
+|---|---|
+| `claude` | resposta do `control_request` `get_usage` (`rate_limits_available`, `rate_limits.five_hour`, `seven_day`…) |
+| `codex` | resultado de `account/rateLimits/read` do `codex app-server` |
+| `antigravity` | JSON de `agy -p /usage --output-format json` (`command.data.groups[].buckets[]`) |
+
+Agente não conectado devolve `null` sem executar nada (o `agy` sem login espera um login interativo). Cada consulta roda com `timeout 20` dentro do container. O AC-WEB interpreta o payload com os mesmos parsers do Arara AI (`src/cli/usage.ts`), mostra os limites no seletor de modelo e calcula quanto cada resposta gastou comparando a leitura antes e depois da execução.
+

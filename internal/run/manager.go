@@ -31,6 +31,7 @@ var (
 	ErrInvalidPrompt    = errors.New("prompt must be between 1 and 102400 bytes of valid UTF-8")
 	ErrInvalidSession   = errors.New("invalid session_id")
 	ErrInvalidModel     = errors.New("invalid model")
+	ErrInvalidEffort    = errors.New("invalid effort")
 	ErrAgentBusy        = errors.New("this agent already has an active run in the instance")
 	ErrInstanceBusy     = errors.New("maximum number of active agents for this instance reached")
 	ErrNotAuthenticated = errors.New("agent is not authenticated for this instance")
@@ -51,6 +52,7 @@ type Request struct {
 	Prompt    string
 	SessionID string
 	Model     string
+	Effort    string
 	Repo      string
 }
 
@@ -117,6 +119,9 @@ func Validate(req Request) error {
 	}
 	if req.Model != "" && !agent.ValidModel(req.Model) {
 		return ErrInvalidModel
+	}
+	if req.Effort != "" && !agent.ValidEffort(req.Effort) {
+		return ErrInvalidEffort
 	}
 	return nil
 }
@@ -190,7 +195,7 @@ func (m *Manager) Start(ctx context.Context, in store.Instance, name string, req
 		return store.Run{}, err
 	}
 	act.hub.Publish("status", map[string]any{"run_id": r.ID, "agent": name, "status": r.Status})
-	cmd := a.Run(agent.RunInput{Prompt: req.Prompt, SessionID: req.SessionID, Model: req.Model, UseAPIKey: creds.UseAPIKey})
+	cmd := a.Run(agent.RunInput{Prompt: req.Prompt, SessionID: req.SessionID, Model: req.Model, Effort: req.Effort, UseAPIKey: creds.UseAPIKey})
 	go m.execute(rctx, in, a, act, cmd, cwd, creds, release)
 	return r, nil
 }

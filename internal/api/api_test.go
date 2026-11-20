@@ -27,6 +27,8 @@ func handler(e *fakedocker.Exec) int {
 	prompt, _ := io.ReadAll(e.Stdin)
 	cmd := e.Spec.Cmd
 	switch {
+	case cmd[0] == "timeout" && cmd[2] == "claude" && strings.Contains(string(prompt), "get_usage"):
+		fmt.Fprintln(e.Stdout, `{"type":"control_response","response":{"subtype":"success","request_id":"arara-usage","response":{"rate_limits_available":true,"rate_limits":{"five_hour":{"utilization":42}}}}}`)
 	case cmd[0] == "claude" && cmd[1] == "auth":
 		fmt.Fprint(e.Stdout, `{"loggedIn":true,"authMethod":"claude.ai","email":"dev@example.com"}`)
 	case cmd[0] == "codex" && cmd[1] == "login":
@@ -277,5 +279,43 @@ func TestDashboardHeaders(t *testing.T) {
 	body, _ := io.ReadAll(res.Body)
 	if strings.Contains(string(body), adminKey) {
 		t.Fatal("api key embedded in dashboard")
+	}
+}
+
+func TestAgentUsageIsReadPerInstanceWithoutPrompt(t *testing.T) {
+	h := newHarness(t)
+	a := h.instance(t, "a")
+	b := h.instance(t, "b")
+	if r := h.do(t, "GET", "/api/instances/"+a+"/agents/claude/usage", adminKey, nil); r.status != 409 || errCode(r) != "instance_not_running" {
+		t.Fatalf("usage on stopped: %d %s", r.status, r.raw)
+	}
+	if r := h.do(t, "POST", "/api/instances/"+a+"/start", adminKey, nil); r.status != 200 {
+		t.Fatalf("start: %d %s", r.status, r.raw)
+	}
+	if r := h.do(t, "GET", "/api/instances/"+a+"/agents", adminKey, nil); r.status != 200 || !strings.Contains(r.raw, `"connected"`) {
+		t.Fatalf("agents: %d %s", r.status, r.raw)
+	}
+	r := h.do(t, "GET", "/api/instances/"+a+"/agents/claude/usage", adminKey, nil)
+	usage, _ := r.body["usage"].(map[string]any)
+	if r.status != 200 || usage["rate_limits_available"] != true {
+		t.Fatalf("usage: %d %s", r.status, r.raw)
+	}
+	if r := h.do(t, "GET", "/api/instances/"+a+"/agents/codex/usage", adminKey, nil); r.status != 200 || !strings.Contains(r.raw, `"usage":null`) {
+		t.Fatalf("codex without payload: %d %s", r.status, r.raw)
+	}
+	if r := h.do(t, "GET", "/api/instances/"+b+"/agents/claude/usage", adminKey, nil); r.status != 409 {
+		t.Fatalf("usage on other stopped instance: %d %s", r.status, r.raw)
+	}
+	if r := h.do(t, "GET", "/api/instances/"+a+"/agents/nope/usage", adminKey, nil); r.status != 404 {
+		t.Fatalf("unknown agent: %d %s", r.status, r.raw)
+	}
+	for _, spec := range h.env.Engine.ExecLog() {
+		line := strings.Join(spec.Cmd, " ")
+		if strings.Contains(line, "app-server") {
+			t.Fatalf("usage probe ran for a disconnected agent: %s", line)
+		}
+		if strings.HasPrefix(line, "timeout ") && !strings.Contains(spec.Container, strings.TrimPrefix(a, "inst_")) {
+			t.Fatalf("usage ran outside instance a: %s", spec.Container)
+		}
 	}
 }
