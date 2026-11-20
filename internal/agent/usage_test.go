@@ -49,5 +49,10 @@ func TestUsageCommandsAreBoundedAndNeverSendPrompts(t *testing.T) {
 		if strings.Contains(string(spec.Stdin), `"type":"user"`) {
 			t.Fatalf("%s usage probe sends a prompt", a.Name())
 		}
+		for _, step := range spec.Steps {
+			if strings.Contains(string(step.Send), `"type":"user"`) {
+				t.Fatalf("%s usage probe sends a prompt in step", a.Name())
+			}
+		}
 	}
 }

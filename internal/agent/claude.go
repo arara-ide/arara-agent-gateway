@@ -32,19 +32,32 @@ func (Claude) StatusArgs() []string { return []string{"claude", "auth", "status"
 
 func (Claude) ModelsCommand() *ModelsCommand {
 	return &ModelsCommand{
-		Args:  []string{"claude", "-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose"},
-		Stdin: []byte("{\"type\":\"control_request\",\"request_id\":\"arara-models\",\"request\":{\"subtype\":\"initialize\"}}\n"),
+		Args: []string{"timeout", usageTimeoutSeconds, "claude", "-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose"},
+		Steps: []QueryStep{
+			{
+				Send:  []byte("{\"type\":\"control_request\",\"request_id\":\"arara-models\",\"request\":{\"subtype\":\"initialize\"}}\n"),
+				Match: matchControlResponse("arara-models"),
+			},
+		},
 	}
 }
 
 func (Claude) ParseModels(stdout string) []Model { return ParseClaudeModels(stdout) }
 
 func (Claude) UsageCommand() *ModelsCommand {
-	return usageCommand(
-		[]string{"claude", "-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose"},
-		[]byte("{\"type\":\"control_request\",\"request_id\":\"arara-init\",\"request\":{\"subtype\":\"initialize\"}}\n"+
-			"{\"type\":\"control_request\",\"request_id\":\"arara-usage\",\"request\":{\"subtype\":\"get_usage\"}}\n"),
-	)
+	return &ModelsCommand{
+		Args: []string{"timeout", usageTimeoutSeconds, "claude", "-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose"},
+		Steps: []QueryStep{
+			{
+				Send:  []byte("{\"type\":\"control_request\",\"request_id\":\"arara-init\",\"request\":{\"subtype\":\"initialize\"}}\n"),
+				Match: matchControlResponse("arara-init"),
+			},
+			{
+				Send:  []byte("{\"type\":\"control_request\",\"request_id\":\"arara-usage\",\"request\":{\"subtype\":\"get_usage\"}}\n"),
+				Match: matchControlResponse("arara-usage"),
+			},
+		},
+	}
 }
 
 func (Claude) ParseUsage(stdout string) json.RawMessage { return ParseClaudeUsage(stdout) }

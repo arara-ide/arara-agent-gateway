@@ -37,26 +37,36 @@ func (Codex) StatusArgs() []string { return []string{"codex", "login", "status"}
 
 func (Codex) ModelsCommand() *ModelsCommand {
 	return &ModelsCommand{
-		Args: []string{"codex", "app-server"},
-		Stdin: []byte(
-			"{\"id\":1,\"method\":\"initialize\",\"params\":{\"clientInfo\":{\"name\":\"arara\",\"version\":\"0.2.0\"}}}\n" +
-				"{\"method\":\"initialized\"}\n" +
-				"{\"id\":2,\"method\":\"model/list\",\"params\":{}}\n",
-		),
+		Args: []string{"timeout", usageTimeoutSeconds, "codex", "app-server"},
+		Steps: []QueryStep{
+			{
+				Send:  []byte("{\"id\":1,\"method\":\"initialize\",\"params\":{\"clientInfo\":{\"name\":\"arara\",\"version\":\"0.2.0\"}}}\n"),
+				Match: matchRPCID(1),
+			},
+			{
+				Send:  []byte("{\"method\":\"initialized\"}\n{\"id\":2,\"method\":\"model/list\",\"params\":{}}\n"),
+				Match: matchRPCID(2),
+			},
+		},
 	}
 }
 
 func (Codex) ParseModels(stdout string) []Model { return ParseCodexModels(stdout) }
 
 func (Codex) UsageCommand() *ModelsCommand {
-	return usageCommand(
-		[]string{"codex", "app-server"},
-		[]byte(
-			"{\"id\":1,\"method\":\"initialize\",\"params\":{\"clientInfo\":{\"name\":\"arara\",\"version\":\"0.2.0\"}}}\n"+
-				"{\"method\":\"initialized\"}\n"+
-				"{\"id\":2,\"method\":\"account/rateLimits/read\"}\n",
-		),
-	)
+	return &ModelsCommand{
+		Args: []string{"timeout", usageTimeoutSeconds, "codex", "app-server"},
+		Steps: []QueryStep{
+			{
+				Send:  []byte("{\"id\":1,\"method\":\"initialize\",\"params\":{\"clientInfo\":{\"name\":\"arara\",\"version\":\"0.2.0\"}}}\n"),
+				Match: matchRPCID(1),
+			},
+			{
+				Send:  []byte("{\"method\":\"initialized\"}\n{\"id\":2,\"method\":\"account/rateLimits/read\"}\n"),
+				Match: matchRPCID(2),
+			},
+		},
+	}
 }
 
 func (Codex) ParseUsage(stdout string) json.RawMessage { return ParseCodexUsage(stdout) }
