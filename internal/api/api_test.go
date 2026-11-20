@@ -24,11 +24,23 @@ import (
 const adminKey = "admin-key-0123456789-0123456789-abcdef"
 
 func handler(e *fakedocker.Exec) int {
-	prompt, _ := io.ReadAll(e.Stdin)
 	cmd := e.Spec.Cmd
+	if cmd[0] == "timeout" && len(cmd) > 2 && cmd[2] == "claude" {
+		sc := bufio.NewScanner(e.Stdin)
+		for sc.Scan() {
+			line := sc.Text()
+			if strings.Contains(line, `"initialize"`) {
+				fmt.Fprintln(e.Stdout, `{"type":"control_response","response":{"subtype":"success","request_id":"arara-init","response":{}}}`)
+			}
+			if strings.Contains(line, `"get_usage"`) {
+				fmt.Fprintln(e.Stdout, `{"type":"control_response","response":{"subtype":"success","request_id":"arara-usage","response":{"rate_limits_available":true,"rate_limits":{"five_hour":{"utilization":42}}}}}`)
+				return 0
+			}
+		}
+		return 0
+	}
+	prompt, _ := io.ReadAll(e.Stdin)
 	switch {
-	case cmd[0] == "timeout" && cmd[2] == "claude" && strings.Contains(string(prompt), "get_usage"):
-		fmt.Fprintln(e.Stdout, `{"type":"control_response","response":{"subtype":"success","request_id":"arara-usage","response":{"rate_limits_available":true,"rate_limits":{"five_hour":{"utilization":42}}}}}`)
 	case cmd[0] == "claude" && cmd[1] == "auth":
 		fmt.Fprint(e.Stdout, `{"loggedIn":true,"authMethod":"claude.ai","email":"dev@example.com"}`)
 	case cmd[0] == "codex" && cmd[1] == "login":

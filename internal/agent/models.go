@@ -16,9 +16,36 @@ type Model struct {
 	Variants  map[string]string `json:"variants,omitempty"`
 }
 
+type QueryStep struct {
+	Send  []byte
+	Match func(line []byte) bool
+}
+
 type ModelsCommand struct {
 	Args  []string
 	Stdin []byte
+	Steps []QueryStep
+}
+
+func matchRPCID(want int) func([]byte) bool {
+	return func(line []byte) bool {
+		var msg struct {
+			ID *int `json:"id"`
+		}
+		return json.Unmarshal(line, &msg) == nil && msg.ID != nil && *msg.ID == want
+	}
+}
+
+func matchControlResponse(requestID string) func([]byte) bool {
+	return func(line []byte) bool {
+		var msg struct {
+			Type     string `json:"type"`
+			Response struct {
+				RequestID string `json:"request_id"`
+			} `json:"response"`
+		}
+		return json.Unmarshal(line, &msg) == nil && msg.Type == "control_response" && msg.Response.RequestID == requestID
+	}
 }
 
 var (

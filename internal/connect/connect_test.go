@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/arara-ide/arara-agent-gateway/internal/agent"
 	"github.com/arara-ide/arara-agent-gateway/internal/connect"
 	"github.com/arara-ide/arara-agent-gateway/internal/docker/fakedocker"
 	"github.com/arara-ide/arara-agent-gateway/internal/store"
@@ -252,5 +253,109 @@ func TestCodexAccountLoginReadsStatusFromStderr(t *testing.T) {
 	}
 	if conn := svc.Connection(context.Background(), in.ID, "codex"); conn.Account != "ChatGPT" {
 		t.Fatalf("unexpected Codex account status %s", conn.Status)
+	}
+}
+
+func TestInteractiveStepsWaitForEachResponse(t *testing.T) {
+	env := testutil.NewEnv(t, 10)
+	env.Engine.SetHandler(func(e *fakedocker.Exec) int {
+		rd := bufio.NewScanner(e.Stdin)
+		if !rd.Scan() {
+			return 1
+		}
+		first := rd.Text()
+		switch {
+		case len(e.Spec.Cmd) >= 3 && e.Spec.Cmd[2] == "codex":
+			fmt.Fprintln(e.Stdout, `{"id":1,"result":{"ok":true}}`)
+			if !rd.Scan() || !rd.Scan() {
+				return 1
+			}
+			if rd.Text() == `{"id":2,"method":"model/list","params":{}}` {
+				fmt.Fprintln(e.Stdout, `{"id":2,"result":{"data":[{"model":"gpt-5.4","displayName":"GPT-5.4","isDefault":true}]}}`)
+			} else {
+				fmt.Fprintln(e.Stdout, `{"id":2,"result":{"rateLimits":{"primary":{"usedPercent":19,"windowDurationMins":300}}}}`)
+			}
+			return 0
+		case len(e.Spec.Cmd) >= 3 && e.Spec.Cmd[2] == "claude":
+			if first == `{"type":"control_request","request_id":"arara-init","request":{"subtype":"initialize"}}` {
+				fmt.Fprintln(e.Stdout, `{"type":"control_response","response":{"subtype":"success","request_id":"arara-init","response":{}}}`)
+				if !rd.Scan() {
+					return 1
+				}
+				fmt.Fprintln(e.Stdout, `{"type":"control_response","response":{"subtype":"success","request_id":"arara-usage","response":{"rate_limits_available":true,"rate_limits":{"five_hour":{"utilization":37}}}}}`)
+			}
+			return 0
+		}
+		return 0
+	})
+	svc := connect.New(env.Store, env.Box, env.Instances, env.Engine, env.Clock.Now, testutil.Logger())
+	in := env.Running(t, "inst-steps")
+	for _, provider := range []string{"codex", "claude"} {
+		if err := env.Store.UpsertConnection(context.Background(), store.Connection{
+			InstanceID: in.ID, Provider: provider, Status: store.ConnConnected, Method: "account",
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	models, err := svc.ListModels(context.Background(), in, "codex")
+	if err != nil || len(models) != 1 || models[0].ID != "gpt-5.4" {
+		t.Fatalf("codex models: %+v err=%v", models, err)
+	}
+	codexUsage, err := svc.Usage(context.Background(), in, "codex")
+	if err != nil || len(codexUsage) == 0 {
+		t.Fatalf("codex usage: %s err=%v", codexUsage, err)
+	}
+	claudeUsage, err := svc.Usage(context.Background(), in, "claude")
+	if err != nil || len(claudeUsage) == 0 {
+		t.Fatalf("claude usage: %s err=%v", claudeUsage, err)
+	}
+}
+
+func TestProbeKeepsConnectedOnInconclusiveOrStoppedContainer(t *testing.T) {
+	env := testutil.NewEnv(t, 10)
+	exitCode := 143
+	stdout := ""
+	stderr := ""
+	env.Engine.SetHandler(func(e *fakedocker.Exec) int {
+		if stdout != "" {
+			fmt.Fprintln(e.Stdout, stdout)
+		}
+		if stderr != "" {
+			fmt.Fprintln(e.Stderr, stderr)
+		}
+		return exitCode
+	})
+	svc := connect.New(env.Store, env.Box, env.Instances, env.Engine, env.Clock.Now, testutil.Logger())
+	in := env.Running(t, "inst-probe")
+	if err := env.Store.UpsertConnection(context.Background(), store.Connection{
+		InstanceID: in.ID, Provider: "claude", Status: store.ConnConnected, Method: "account", Account: "dev@example.com",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	a, _ := agent.Get("claude")
+
+	if got := svc.Probe(context.Background(), in, a); got.Status != store.ConnConnected {
+		t.Fatalf("signal exit marked connection %s", got.Status)
+	}
+
+	exitCode, stdout, stderr = 1, "", ""
+	if got := svc.Probe(context.Background(), in, a); got.Status != store.ConnConnected {
+		t.Fatalf("empty output marked connection %s", got.Status)
+	}
+
+	exitCode, stdout = 0, `{"loggedIn":false}`
+	if _, err := env.Instances.Stop(context.Background(), in.ID); err != nil {
+		t.Fatal(err)
+	}
+	if got := svc.Probe(context.Background(), in, a); got.Status != store.ConnConnected {
+		t.Fatalf("probe racing container stop marked connection %s", got.Status)
+	}
+
+	in, err := env.Instances.Start(context.Background(), in.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := svc.Probe(context.Background(), in, a); got.Status != store.ConnExpired {
+		t.Fatalf("explicit logged-out status got %s, want expired", got.Status)
 	}
 }

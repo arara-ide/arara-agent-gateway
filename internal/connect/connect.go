@@ -1,6 +1,7 @@
 package connect
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
@@ -211,6 +212,13 @@ func (s *Service) query(ctx context.Context, in store.Instance, name string, com
 	defer release()
 	pctx, cancel := context.WithTimeout(ctx, statusTimeout)
 	defer cancel()
+	if len(spec.Steps) > 0 {
+		out, err := s.runSteps(pctx, in.ID, spec.Args, creds.Env, spec.Steps)
+		if err != nil {
+			return nil, nil, err
+		}
+		return a, &out, nil
+	}
 	res, err := docker.Output(pctx, s.engine, docker.ExecSpec{
 		Container: instance.ContainerName(in.ID),
 		Cmd:       spec.Args,
@@ -222,6 +230,54 @@ func (s *Service) query(ctx context.Context, in store.Instance, name string, com
 		return nil, nil, err
 	}
 	return a, &res.Stdout, nil
+}
+
+func (s *Service) runSteps(ctx context.Context, instanceID string, args, env []string, steps []agent.QueryStep) (string, error) {
+	p, err := s.engine.Exec(ctx, docker.ExecSpec{
+		Container: instance.ContainerName(instanceID),
+		Cmd:       args,
+		WorkDir:   instance.HomeDir,
+		Env:       env,
+		Stdin:     true,
+	})
+	if err != nil {
+		return "", err
+	}
+	defer p.Close()
+	done := make(chan struct{})
+	defer close(done)
+	go func() {
+		select {
+		case <-done:
+			return
+		case <-ctx.Done():
+			_ = p.CloseStdin()
+			_ = p.Close()
+		}
+	}()
+	if _, err := p.Write(steps[0].Send); err != nil {
+		return "", err
+	}
+	var out strings.Builder
+	scanner := bufio.NewScanner(io.LimitReader(p.Stdout(), 4<<20))
+	scanner.Buffer(make([]byte, 64<<10), 1<<20)
+	step := 0
+	for scanner.Scan() {
+		line := scanner.Bytes()
+		out.Write(line)
+		out.WriteByte('\n')
+		if steps[step].Match != nil && steps[step].Match(line) {
+			step++
+			if step >= len(steps) {
+				break
+			}
+			if _, err := p.Write(steps[step].Send); err != nil {
+				break
+			}
+		}
+	}
+	_ = p.CloseStdin()
+	return out.String(), nil
 }
 
 func (s *Service) probe(ctx context.Context, in store.Instance, a agent.Adapter, login *loginSession) store.Connection {
@@ -249,6 +305,15 @@ func (s *Service) probe(ctx context.Context, in store.Instance, a agent.Adapter,
 	ok, account := a.ParseStatus(res.ExitCode, res.Stdout)
 	if !ok && res.Stderr != "" {
 		ok, account = a.ParseStatus(res.ExitCode, res.Stderr)
+	}
+	if !ok {
+		if res.ExitCode >= 128 || (strings.TrimSpace(res.Stdout) == "" && strings.TrimSpace(res.Stderr) == "") {
+			s.log.Warn("agent status probe inconclusive", "agent", a.Name(), "instance", in.ID, "exit_code", res.ExitCode)
+			return current
+		}
+		if latestInst, instErr := s.inst.Get(ctx, in.ID); instErr != nil || latestInst.State != store.StateRunning {
+			return current
+		}
 	}
 	next := store.Connection{InstanceID: in.ID, Provider: a.Name(), Method: agent.MethodAccount, UpdatedAt: s.now().UTC()}
 	switch {
