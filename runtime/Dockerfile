@@ -1,7 +1,7 @@
 FROM node:22-bookworm-slim
 
 ARG CLAUDE_CODE_VERSION=latest
-ARG CODEX_VERSION=latest
+ARG CODEX_VERSION=0.170.0
 
 ENV DEBIAN_FRONTEND=noninteractive \
     AGY_CLI_DISABLE_AUTO_UPDATE=true \
