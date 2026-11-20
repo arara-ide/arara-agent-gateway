@@ -40,3 +40,7 @@ jobs:
         env:
           E2E_SKIP_PROVIDERS: "1"
         run: ./scripts/e2e-docker.sh
+  deploy:
+    if: github.event_name == 'push' && github.repository == 'arara-ide/arara-agent-gateway'
+    needs: docker
+    uses: ./.github/workflows/deploy.yml

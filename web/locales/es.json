@@ -118,6 +118,7 @@
   "error.invalid_api_key": "El formato de la clave de API no es válido.",
   "error.invalid_login_input": "Código no válido.",
   "error.login_not_found": "No hay inicio de sesión en curso.",
+  "error.login_in_progress": "Espera a que termine el inicio de sesión del agente.",
   "error.login_input_not_expected": "El inicio de sesión no espera un código.",
   "error.github_not_configured": "La integración con GitHub no está configurada.",
   "error.github_not_connected": "Conecta GitHub primero.",

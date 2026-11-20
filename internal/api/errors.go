@@ -52,6 +52,7 @@ var errorTable = []struct {
 	{connect.ErrInvalidAPIKey, newError(http.StatusBadRequest, "invalid_api_key", "The API key format is invalid")},
 	{connect.ErrInvalidInput, newError(http.StatusBadRequest, "invalid_login_input", "The login code is invalid")},
 	{connect.ErrLoginNotFound, newError(http.StatusNotFound, "login_not_found", "No login session for this agent")},
+	{connect.ErrLoginInProgress, newError(http.StatusConflict, "login_in_progress", "Wait for the current agent login to finish")},
 	{connect.ErrLoginNoInput, newError(http.StatusConflict, "login_input_not_expected", "This login session is not waiting for a code")},
 	{github.ErrDisabled, newError(http.StatusServiceUnavailable, "github_not_configured", "GitHub integration is not configured")},
 	{github.ErrInvalidState, newError(http.StatusBadRequest, "github_invalid_state", "Invalid or expired GitHub authorization")},

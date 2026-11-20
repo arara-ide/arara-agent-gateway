@@ -2,6 +2,7 @@ package agent
 
 import (
 	"encoding/json"
+	"net/url"
 	"strings"
 )
 
@@ -58,6 +59,13 @@ func (Antigravity) Login() *Login {
 		AutoSend:   []AutoSend{{Match: "select login method", Input: "\r"}},
 		Success:    []string{"successfully signed in", "signed in as", "login successful", "authentication successful"},
 		Failure:    []string{"got an error:", "token exchange failed", "invalid_grant"},
+		AuthorizeURL: func(u *url.URL) bool {
+			q, err := url.ParseQuery(u.RawQuery)
+			return err == nil && u.Hostname() == "accounts.google.com" &&
+				(u.Path == "/o/oauth2/auth" || u.Path == "/o/oauth2/v2/auth") &&
+				q.Get("response_type") == "code" && q.Get("client_id") != "" &&
+				q.Get("state") != "" && q.Get("redirect_uri") != ""
+		},
 	}
 }
 

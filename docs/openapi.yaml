@@ -366,13 +366,14 @@ paths:
         "404": { $ref: "#/components/responses/Error" }
     delete:
       tags: [agents]
-      summary: Cancel the login session
+      summary: Cancel the login session before the account code is submitted
       responses:
         "200":
           description: Cancelled
           content:
             application/json:
               schema: { $ref: "#/components/schemas/LoginResponse" }
+        "409": { $ref: "#/components/responses/Error" }
   /api/instances/{id}/agents/{agent}/login/input:
     parameters:
       - { $ref: "#/components/parameters/InstanceId" }
@@ -405,6 +406,7 @@ paths:
     post:
       tags: [agents]
       summary: Sign the CLI account out inside the instance
+      description: Returns `409 login_in_progress` during an account sign-in.
       responses:
         "200":
           description: Signed out

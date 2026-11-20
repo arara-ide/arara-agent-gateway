@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"net/url"
 	"regexp"
 	"sort"
 	"strings"
@@ -51,13 +52,14 @@ type AutoSend struct {
 }
 
 type Login struct {
-	Args       []string
-	Env        []string
-	Tty        bool
-	NeedsInput bool
-	AutoSend   []AutoSend
-	Success    []string
-	Failure    []string
+	Args         []string
+	Env          []string
+	Tty          bool
+	NeedsInput   bool
+	AutoSend     []AutoSend
+	Success      []string
+	Failure      []string
+	AuthorizeURL func(*url.URL) bool
 }
 
 type Logout struct {
@@ -106,11 +108,12 @@ func Names() []string {
 }
 
 var (
-	sessionPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$`)
-	modelPattern   = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:/\[\]-]{0,79}$`)
-	ansiPattern    = regexp.MustCompile(`\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(\x07|\x1b\\)|\x1b[@-Z\\-_]`)
-	urlPattern     = regexp.MustCompile(`https://[^\s"'<>\x1b]+`)
-	codePattern    = regexp.MustCompile(`\b[A-Z0-9]{4,5}-[A-Z0-9]{4,5}\b`)
+	sessionPattern   = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$`)
+	modelPattern     = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:/\[\]-]{0,79}$`)
+	ansiPattern      = regexp.MustCompile(`\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(\x07|\x1b\\)|\x1b[@-Z\\-_]`)
+	urlPattern       = regexp.MustCompile(`https://[^\s"'<>\x1b]+`)
+	hyperlinkPattern = regexp.MustCompile(`\x1b\]8;[^;\x07\x1b]*;(https://[^\x07\x1b]+)(?:\x07|\x1b\\)`)
+	codePattern      = regexp.MustCompile(`\b[A-Z0-9]{4,5}-[A-Z0-9]{4,5}\b`)
 )
 
 func ValidSessionID(s string) bool { return sessionPattern.MatchString(s) }
@@ -118,24 +121,38 @@ func ValidModel(s string) bool     { return modelPattern.MatchString(s) }
 
 func StripANSI(s string) string { return ansiPattern.ReplaceAllString(s, "") }
 
-func FindURL(text string, hints ...string) string {
-	clean := StripANSI(text)
-	for _, u := range urlPattern.FindAllString(clean, -1) {
-		u = strings.TrimRight(u, ".,)")
-		if len(hints) == 0 {
-			return u
+func (l Login) FindAuthorizeURL(text string) string {
+	valid := func(raw string) bool {
+		parsed, err := url.Parse(raw)
+		return err == nil && parsed.Scheme == "https" && parsed.User == nil &&
+			(parsed.Port() == "" || parsed.Port() == "443") && l.AuthorizeURL(parsed)
+	}
+	for _, link := range hyperlinkPattern.FindAllStringSubmatch(text, -1) {
+		if valid(link[1]) {
+			return link[1]
 		}
-		for _, h := range hints {
-			if strings.Contains(u, h) {
-				return u
-			}
+	}
+	clean := StripANSI(text)
+	for _, match := range urlPattern.FindAllStringIndex(clean, -1) {
+		if match[1] == len(clean) {
+			continue
+		}
+		raw := strings.TrimRight(clean[match[0]:match[1]], ".,)")
+		if valid(raw) {
+			return raw
 		}
 	}
 	return ""
 }
 
 func FindDeviceCode(text string) string {
-	return codePattern.FindString(StripANSI(text))
+	clean := StripANSI(text)
+	for _, match := range codePattern.FindAllStringIndex(clean, -1) {
+		if match[1] < len(clean) {
+			return clean[match[0]:match[1]]
+		}
+	}
+	return ""
 }
 
 func ContainsAny(text string, needles ...string) bool {

@@ -118,6 +118,7 @@
   "error.invalid_api_key": "O formato da chave de API é inválido.",
   "error.invalid_login_input": "Código inválido.",
   "error.login_not_found": "Nenhum login em andamento.",
+  "error.login_in_progress": "Aguarde a conclusão do login do agente.",
   "error.login_input_not_expected": "O login não está aguardando um código.",
   "error.github_not_configured": "A integração com o GitHub não está configurada.",
   "error.github_not_connected": "Conecte o GitHub primeiro.",
