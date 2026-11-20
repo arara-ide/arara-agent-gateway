@@ -116,6 +116,11 @@ log "agents"
 req GET "/instances/$A/agents" "$ADMIN"; expect 200 "agent status"
 [ "$(jq -r '[.agents[].status] | unique | join(",")' <<<"$BODY")" = setup_required ] || fail "fresh agents should need setup: $BODY"
 ok "fresh instance reports setup_required for all three agents"
+for agent in claude codex antigravity; do
+  req GET "/instances/$A/agents/$agent/usage" "$ADMIN"; expect 200 "$agent usage probe"
+  jq -e 'has("usage")' <<<"$BODY" >/dev/null || fail "$agent usage payload: $BODY"
+done
+ok "usage probes answer without a prompt on a fresh instance"
 req POST "/instances/$A/agents/claude/run" "$ADMIN" '{"prompt":"hi"}'; expect 409 "claude run without login is rejected"
 [ "$(jq -r .error.code <<<"$BODY")" = agent_not_authenticated ] || fail "error code"
 if [ "${E2E_SKIP_PROVIDERS:-0}" != 1 ]; then

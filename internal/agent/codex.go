@@ -21,6 +21,9 @@ func (Codex) Run(in RunInput) Command {
 	if in.Model != "" {
 		args = append(args, "--model", in.Model)
 	}
+	if in.Effort != "" {
+		args = append(args, "-c", `model_reasoning_effort="`+in.Effort+`"`)
+	}
 	if in.SessionID != "" {
 		args = append(args, in.SessionID)
 	}
@@ -31,6 +34,32 @@ func (Codex) Run(in RunInput) Command {
 func (Codex) APIKeyEnv(key string) []string { return []string{"CODEX_API_KEY=" + key} }
 
 func (Codex) StatusArgs() []string { return []string{"codex", "login", "status"} }
+
+func (Codex) ModelsCommand() *ModelsCommand {
+	return &ModelsCommand{
+		Args: []string{"codex", "app-server"},
+		Stdin: []byte(
+			"{\"id\":1,\"method\":\"initialize\",\"params\":{\"clientInfo\":{\"name\":\"arara\",\"version\":\"0.2.0\"}}}\n" +
+				"{\"method\":\"initialized\"}\n" +
+				"{\"id\":2,\"method\":\"model/list\",\"params\":{}}\n",
+		),
+	}
+}
+
+func (Codex) ParseModels(stdout string) []Model { return ParseCodexModels(stdout) }
+
+func (Codex) UsageCommand() *ModelsCommand {
+	return usageCommand(
+		[]string{"codex", "app-server"},
+		[]byte(
+			"{\"id\":1,\"method\":\"initialize\",\"params\":{\"clientInfo\":{\"name\":\"arara\",\"version\":\"0.2.0\"}}}\n"+
+				"{\"method\":\"initialized\"}\n"+
+				"{\"id\":2,\"method\":\"account/rateLimits/read\"}\n",
+		),
+	)
+}
+
+func (Codex) ParseUsage(stdout string) json.RawMessage { return ParseCodexUsage(stdout) }
 
 func (Codex) ParseStatus(exitCode int, stdout string) (bool, string) {
 	text := strings.TrimSpace(StripANSI(stdout))
@@ -110,6 +139,10 @@ func (p *codexParser) Line(line []byte) []Event {
 			}
 			p.messages = append(p.messages, msg.Item.Text)
 			return []Event{{Type: "delta", Text: text}}
+		case "reasoning":
+			if msg.Item.Text != "" {
+				return []Event{{Type: "reasoning", Text: msg.Item.Text + "\n\n"}}
+			}
 		case "file_change":
 			paths := make([]string, 0, len(msg.Item.Changes))
 			for _, c := range msg.Item.Changes {

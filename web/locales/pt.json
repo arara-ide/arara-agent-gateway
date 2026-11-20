@@ -110,6 +110,7 @@
   "error.invalid_prompt": "Escreva um prompt de até 100 KB.",
   "error.invalid_session_id": "Sessão inválida.",
   "error.invalid_model": "Nome de modelo inválido.",
+  "error.invalid_effort": "Nível de esforço inválido.",
   "error.agent_busy": "Este agente já está executando na instância.",
   "error.instance_busy": "Limite de agentes desta instância atingido.",
   "error.agent_not_authenticated": "Conecte este agente antes de executá-lo.",

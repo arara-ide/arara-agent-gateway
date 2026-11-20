@@ -20,6 +20,9 @@ func (Antigravity) Run(in RunInput) Command {
 	if in.Model != "" {
 		args = append(args, "--model", in.Model)
 	}
+	if in.Effort != "" {
+		args = append(args, "--effort", in.Effort)
+	}
 	if in.SessionID != "" {
 		args = append(args, "--conversation", in.SessionID)
 	}
@@ -31,6 +34,18 @@ func (Antigravity) APIKeyEnv(key string) []string { return []string{"GEMINI_API_
 func (Antigravity) StatusArgs() []string {
 	return []string{"agy", "--output-format", "json", "models"}
 }
+
+func (Antigravity) ModelsCommand() *ModelsCommand {
+	return &ModelsCommand{Args: []string{"agy", "--output-format", "json", "models"}}
+}
+
+func (Antigravity) ParseModels(stdout string) []Model { return ParseAntigravityModels(stdout) }
+
+func (Antigravity) UsageCommand() *ModelsCommand {
+	return usageCommand([]string{"agy", "-p", "/usage", "--output-format", "json"}, nil)
+}
+
+func (Antigravity) ParseUsage(stdout string) json.RawMessage { return ParseAntigravityUsage(stdout) }
 
 func (Antigravity) ParseStatus(exitCode int, stdout string) (bool, string) {
 	if exitCode != 0 {

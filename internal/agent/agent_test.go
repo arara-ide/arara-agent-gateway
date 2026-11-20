@@ -204,3 +204,22 @@ func TestGoogleLoginUsesCompleteTerminalHyperlink(t *testing.T) {
 		t.Fatal("non-provider link was accepted")
 	}
 }
+
+func TestReasoningEvents(t *testing.T) {
+	claude := Claude{}.NewParser()
+	thought := claude.Line([]byte(`{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"thinking_delta","thinking":"Plan first"}}}`))
+	text := claude.Line([]byte(`{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"Done"}}}`))
+	empty := claude.Line([]byte(`{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"signature_delta","signature":"x"}}}`))
+	if len(thought) != 1 || thought[0].Type != "reasoning" || thought[0].Text != "Plan first" || len(text) != 1 || text[0].Type != "delta" || len(empty) != 0 {
+		t.Fatalf("claude thought=%+v text=%+v empty=%+v", thought, text, empty)
+	}
+	if out := claude.Outcome(); out.Response != "Done" {
+		t.Fatalf("reasoning leaked into response: %+v", out)
+	}
+	codex := Codex{}.NewParser()
+	reason := codex.Line([]byte(`{"type":"item.completed","item":{"type":"reasoning","text":"**Checking files**"}}`))
+	blank := codex.Line([]byte(`{"type":"item.completed","item":{"type":"reasoning","text":""}}`))
+	if len(reason) != 1 || reason[0].Type != "reasoning" || reason[0].Text != "**Checking files**\n\n" || len(blank) != 0 {
+		t.Fatalf("codex reason=%+v blank=%+v", reason, blank)
+	}
+}

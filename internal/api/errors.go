@@ -44,6 +44,7 @@ var errorTable = []struct {
 	{run.ErrInvalidPrompt, newError(http.StatusBadRequest, "invalid_prompt", run.ErrInvalidPrompt.Error())},
 	{run.ErrInvalidSession, newError(http.StatusBadRequest, "invalid_session_id", "Invalid session_id")},
 	{run.ErrInvalidModel, newError(http.StatusBadRequest, "invalid_model", "Invalid model")},
+	{run.ErrInvalidEffort, newError(http.StatusBadRequest, "invalid_effort", "Invalid effort")},
 	{run.ErrAgentBusy, newError(http.StatusConflict, "agent_busy", run.ErrAgentBusy.Error())},
 	{run.ErrInstanceBusy, newError(http.StatusTooManyRequests, "instance_busy", run.ErrInstanceBusy.Error())},
 	{run.ErrNotAuthenticated, newError(http.StatusConflict, "agent_not_authenticated", "Connect this agent in this instance before running it")},

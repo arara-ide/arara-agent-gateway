@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"encoding/json"
 	"net/url"
 	"regexp"
 	"sort"
@@ -37,6 +38,7 @@ type Parser interface {
 type RunInput struct {
 	SessionID string
 	Model     string
+	Effort    string
 	UseAPIKey bool
 	Prompt    string
 }
@@ -78,6 +80,10 @@ type Adapter interface {
 	APIKeyEnv(key string) []string
 	StatusArgs() []string
 	ParseStatus(exitCode int, stdout string) (bool, string)
+	ModelsCommand() *ModelsCommand
+	ParseModels(stdout string) []Model
+	UsageCommand() *ModelsCommand
+	ParseUsage(stdout string) json.RawMessage
 	Login() *Login
 	Logout() *Logout
 	IsAuthFailure(text string) bool

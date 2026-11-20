@@ -110,6 +110,7 @@
   "error.invalid_prompt": "Write a prompt of up to 100 KB.",
   "error.invalid_session_id": "Invalid session.",
   "error.invalid_model": "Invalid model name.",
+  "error.invalid_effort": "Invalid effort level.",
   "error.agent_busy": "This agent is already running in the instance.",
   "error.instance_busy": "Agent limit for this instance reached.",
   "error.agent_not_authenticated": "Connect this agent before running it.",

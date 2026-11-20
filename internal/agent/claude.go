@@ -17,6 +17,9 @@ func (Claude) Run(in RunInput) Command {
 	if in.Model != "" {
 		args = append(args, "--model", in.Model)
 	}
+	if in.Effort != "" {
+		args = append(args, "--effort", in.Effort)
+	}
 	if in.SessionID != "" {
 		args = append(args, "--resume", in.SessionID)
 	}
@@ -26,6 +29,25 @@ func (Claude) Run(in RunInput) Command {
 func (Claude) APIKeyEnv(key string) []string { return []string{"ANTHROPIC_API_KEY=" + key} }
 
 func (Claude) StatusArgs() []string { return []string{"claude", "auth", "status", "--json"} }
+
+func (Claude) ModelsCommand() *ModelsCommand {
+	return &ModelsCommand{
+		Args:  []string{"claude", "-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose"},
+		Stdin: []byte("{\"type\":\"control_request\",\"request_id\":\"arara-models\",\"request\":{\"subtype\":\"initialize\"}}\n"),
+	}
+}
+
+func (Claude) ParseModels(stdout string) []Model { return ParseClaudeModels(stdout) }
+
+func (Claude) UsageCommand() *ModelsCommand {
+	return usageCommand(
+		[]string{"claude", "-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose"},
+		[]byte("{\"type\":\"control_request\",\"request_id\":\"arara-init\",\"request\":{\"subtype\":\"initialize\"}}\n"+
+			"{\"type\":\"control_request\",\"request_id\":\"arara-usage\",\"request\":{\"subtype\":\"get_usage\"}}\n"),
+	)
+}
+
+func (Claude) ParseUsage(stdout string) json.RawMessage { return ParseClaudeUsage(stdout) }
 
 func (Claude) ParseStatus(_ int, stdout string) (bool, string) {
 	var st struct {
@@ -98,13 +120,19 @@ func (p *claudeParser) Line(line []byte) []Event {
 		var ev struct {
 			Type  string `json:"type"`
 			Delta struct {
-				Type string `json:"type"`
-				Text string `json:"text"`
+				Type     string `json:"type"`
+				Text     string `json:"text"`
+				Thinking string `json:"thinking"`
 			} `json:"delta"`
 		}
-		if json.Unmarshal(msg.Event, &ev) == nil && ev.Type == "content_block_delta" && ev.Delta.Type == "text_delta" && ev.Delta.Text != "" {
+		if json.Unmarshal(msg.Event, &ev) != nil || ev.Type != "content_block_delta" {
+			break
+		}
+		if ev.Delta.Type == "text_delta" && ev.Delta.Text != "" {
 			p.text.WriteString(ev.Delta.Text)
 			events = append(events, Event{Type: "delta", Text: ev.Delta.Text})
+		} else if ev.Delta.Type == "thinking_delta" && ev.Delta.Thinking != "" {
+			events = append(events, Event{Type: "reasoning", Text: ev.Delta.Thinking})
 		}
 	case "assistant":
 		for _, c := range msg.Message.Content {

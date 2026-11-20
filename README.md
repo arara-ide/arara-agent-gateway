@@ -205,7 +205,7 @@ curl -N "${H[@]}" http://localhost:3000/api/instances/$ID/runs/$RUN/stream
 curl -s "${H[@]}" -X POST http://localhost:3000/api/instances/$ID/runs/$RUN/cancel
 ```
 
-O stream SSE envia os eventos `status`, `session`, `delta` (texto), `tool` e `done` (resultado final). Para continuar uma conversa, envie o `session_id` de uma execução anterior. Os três agentes podem rodar ao mesmo tempo na mesma instância, um de cada.
+O stream SSE envia os eventos `status`, `session`, `delta` (texto), `reasoning` (raciocínio do Claude Code e do Codex), `tool` e `done` (resultado final). Para continuar uma conversa, envie o `session_id` de uma execução anterior. Os três agentes podem rodar ao mesmo tempo na mesma instância, um de cada.
 
 ## Histórico
 
