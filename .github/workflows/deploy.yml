@@ -20,7 +20,7 @@ jobs:
   deploy:
     if: github.repository == 'arara-ide/arara-agent-gateway' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/development')
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 20
     environment: ${{ github.ref == 'refs/heads/main' && 'production' || 'sandbox' }}
     steps:
       - name: Trigger deployment
@@ -80,7 +80,7 @@ jobs:
             exit 1
           }
           jq -nc --arg id "$update_id" '{type:"GetUpdate",params:{id:$id}}' > "$scratch/body"
-          deadline=$((SECONDS + 480))
+          deadline=$((SECONDS + 1080))
           while ((SECONDS < deadline)); do
             case $(jq -r '.status' "$scratch/response" 2>/dev/null) in
               Complete)

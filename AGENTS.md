@@ -77,7 +77,7 @@ internal/api/         rotas, autenticação, erros, SSE
 web/                  dashboard estática embutida
 runtime/              Dockerfile da imagem compartilhada e scripts aag-run, aag-kill, aag-prune
 docs/                 OpenAPI, integração AC-WEB, decisões
-scripts/              testes reais com Docker
+scripts/              testes reais com Docker e build da imagem de runtime (`build-runtime.sh`)
 assets.go             embute web/ e docs/openapi.yaml no binário
 ```
 

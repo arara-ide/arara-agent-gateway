@@ -28,6 +28,7 @@ Registro das escolhas de arquitetura, com motivo e alternativas descartadas. Com
 | Um ticker global de inatividade | Custo constante e baixo, mesmo com centenas de instâncias | Goroutine por instância |
 | SSE com buffer de 5.000 eventos por execução e retenção de 2 minutos | Permite reconexão com `Last-Event-ID` sem guardar eventos no banco | WebSocket, eventos persistidos |
 | Overlay `docker-compose.proxy.yml` separado do `docker-compose.yml` | Permite uso local imediato sem redes externas e deploy atrás do Traefik (rede externa e labels) sem conflito de porta entre produção e sandbox | Exigir rede externa no Compose padrão |
+| Imagem de runtime construída por `scripts/build-runtime.sh`, fora do Compose | O deploy resolve as versões mais recentes de Claude Code, Codex (npm) e Antigravity (manifesto oficial) e passa como `--build-arg`, então o cache só cai quando sai versão nova. Se o build falhar, mantém a imagem atual; sem imagem, usa os padrões do Dockerfile. Fora do Compose, a stack não fica com um container encerrado que o Komodo marca como Unhealthy. O CI usa os padrões do Dockerfile para ser reprodutível. Instâncias ligadas pegam a imagem nova ao serem recriadas. | Serviço `runtime` no Compose com `command: ["true"]`, `ARG ...=latest` (o cache do Docker nunca atualiza) |
 
 ## Autenticação e escopo
 

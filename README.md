@@ -4,6 +4,7 @@ Servidor open source que gerencia instâncias isoladas de agentes de programaç�
 
 ```bash
 cp .env.example .env   # preencha API_KEY e CREDENTIALS_ENCRYPTION_KEY
+scripts/build-runtime.sh
 docker compose up -d --build
 ```
 
@@ -83,6 +84,7 @@ O gateway não inicia sem `API_KEY` (32+ caracteres) e `CREDENTIALS_ENCRYPTION_K
 Local:
 
 ```bash
+scripts/build-runtime.sh
 docker compose up -d --build
 docker compose logs -f gateway
 ```
@@ -90,18 +92,20 @@ docker compose logs -f gateway
 Atrás de um proxy reverso Traefik numa rede Docker externa (por exemplo `microservices_network`):
 
 ```bash
+scripts/build-runtime.sh
 docker compose -f docker-compose.yml -f docker-compose.proxy.yml up -d --build
 ```
 
+O `scripts/build-runtime.sh` constrói a imagem de runtime (`RUNTIME_IMAGE` do `.env`, padrão `arara-agent-runtime:local`, cerca de 2 GB) com as versões mais recentes de Claude Code, Codex e Antigravity. Rode-o antes de cada deploy (no Komodo, no `pre_deploy`). Se o build falhar, ele mantém a imagem atual. Instâncias ligadas passam a usar a imagem nova quando são desligadas e ligadas de novo.
+
 O Compose:
-- constrói a imagem de runtime (`arara-agent-runtime:local`, cerca de 2 GB);
 - sobe o gateway como usuário sem privilégio, com rootfs somente leitura;
 - no modo local, publica a porta só em `127.0.0.1`; no modo proxy (`docker-compose.proxy.yml`), remove a porta do host e expõe o serviço via labels Traefik.
 
 ### Sem Docker Compose
 
 ```bash
-docker build -f runtime/Dockerfile -t arara-agent-runtime:local .
+scripts/build-runtime.sh
 go build -o arara-agent-gateway ./cmd/gateway
 set -a; . ./.env; set +a
 ./arara-agent-gateway

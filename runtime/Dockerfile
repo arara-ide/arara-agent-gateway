@@ -1,7 +1,5 @@
-FROM node:22-bookworm-slim
-
-ARG CLAUDE_CODE_VERSION=latest
-ARG CODEX_VERSION=0.170.0
+ARG NODE_IMAGE=node:22-bookworm-slim
+FROM ${NODE_IMAGE}
 
 ENV DEBIAN_FRONTEND=noninteractive \
     AGY_CLI_DISABLE_AUTO_UPDATE=true \
@@ -13,13 +11,17 @@ RUN apt-get update \
  && apt-get install -y --no-install-recommends ca-certificates curl git procps ripgrep openssh-client jq less \
  && rm -rf /var/lib/apt/lists/*
 
+ARG CLAUDE_CODE_VERSION=latest
+ARG CODEX_VERSION=0.170.0
 RUN npm install -g --include=optional "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}" \
  && npm install -g --include=optional "@openai/codex@${CODEX_VERSION}" \
  && npm cache clean --force \
  && claude --version \
  && codex --version
 
-RUN curl -fsSL https://antigravity.google/cli/install.sh -o /tmp/agy-install.sh \
+ARG AGY_VERSION=latest
+RUN echo "agy ${AGY_VERSION}" \
+ && curl -fsSL https://antigravity.google/cli/install.sh -o /tmp/agy-install.sh \
  && HOME=/tmp/agy-home bash /tmp/agy-install.sh --dir /usr/local/bin \
  && rm -rf /tmp/agy-install.sh /tmp/agy-home \
  && agy --version

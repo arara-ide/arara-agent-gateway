@@ -24,17 +24,6 @@ services:
     security_opt:
       - no-new-privileges:true
     restart: unless-stopped
-    depends_on:
-      runtime:
-        condition: service_completed_successfully
-
-  runtime:
-    build:
-      context: .
-      dockerfile: runtime/Dockerfile
-    image: ${RUNTIME_IMAGE}
-    command: ["true"]
-    restart: "no"
 
 volumes:
   gateway-data:
