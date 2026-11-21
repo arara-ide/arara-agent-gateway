@@ -169,6 +169,7 @@ curl -s "${H[@]}" -X POST http://localhost:3000/api/instances/$ID/github/connect
 curl -s "${H[@]}" -X POST http://localhost:3000/api/instances/$ID/github/callback -d '{"code":"…","state":"…"}'
 curl -s "${H[@]}" http://localhost:3000/api/instances/$ID/github/repos
 curl -s "${H[@]}" -X POST http://localhost:3000/api/instances/$ID/repos -d '{"full_name":"octo/app","select":true}'
+curl -s "${H[@]}" "http://localhost:3000/api/instances/$ID/repos/changes?full_name=octo%2Fapp&agent=codex&include_diff=true"
 curl -s "${H[@]}" -X POST http://localhost:3000/api/instances/$ID/repos/octo/app/push -d '{"agent":"codex"}'
 curl -s "${H[@]}" -X DELETE http://localhost:3000/api/instances/$ID/github
 ```

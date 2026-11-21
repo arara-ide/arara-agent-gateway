@@ -65,4 +65,6 @@ type Engine interface {
 	InspectContainer(ctx context.Context, id string) (ContainerInfo, error)
 	ListContainers(ctx context.Context, label string) ([]ContainerInfo, error)
 	Exec(ctx context.Context, spec ExecSpec) (Process, error)
+	ContainerStats(ctx context.Context, id string) (Stats, error)
+	VolumeSizes(ctx context.Context) (map[string]int64, error)
 }

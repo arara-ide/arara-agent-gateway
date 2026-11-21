@@ -112,6 +112,48 @@ docker exec "aag-$A" sh -c 'mkdir -p ~/.codex/sessions && touch -d "40 days ago"
 
 req POST "/instances/$A/start" "$ADMIN"; expect 200 "start is idempotent"
 
+log "repository changes"
+CHANGES="/instances/$A/repos/changes?full_name=fixture%2Fapp&agent=codex"
+req GET "$CHANGES" "$ADMIN"; expect 200 "no worktree is reported as clean"
+jq -e '.has_changes == false and .can_push == false' <<<"$BODY" >/dev/null || fail "missing worktree: $BODY"
+docker exec -i "aag-$A" sh -eu <<'SH'
+repo="$HOME/work/repos/fixture/app"
+worktree="$HOME/work/worktrees/fixture/app/codex"
+git init -q -b main "$repo"
+git init -q --bare "$HOME/fixture-origin"
+git -C "$repo" remote add origin "$HOME/fixture-origin"
+git -C "$repo" config user.name Fixture
+git -C "$repo" config user.email fixture@example.invalid
+printf 'base\n' >"$repo/app.txt"
+printf 'app.txt filter=fixture\n' >"$repo/.gitattributes"
+git -C "$repo" add .
+git -C "$repo" commit -qm base
+git -C "$repo" worktree add -qb arara/codex "$worktree"
+printf 'staged\n' >"$worktree/app.txt"
+git -C "$worktree" add app.txt
+printf 'working\n' >>"$worktree/app.txt"
+printf 'untracked content\n' >"$worktree/new.txt"
+git -C "$repo" config filter.fixture.clean 'touch /tmp/aag-e2e-filter-ran; cat'
+SH
+req GET "$CHANGES" "$ADMIN"; expect 200 "status enables diff without generating a patch"
+jq -e '.has_changes == true and .can_push == false and (has("diff") | not)' <<<"$BODY" >/dev/null || fail "working changes status: $BODY"
+req GET "$CHANGES&include_diff=true" "$ADMIN"; expect 200 "details show staged and unstaged lines with untracked paths"
+jq -e '(.diff | contains("+staged") and contains("+working")) and .untracked == ["new.txt"]' <<<"$BODY" >/dev/null || fail "working changes details: $BODY"
+docker exec "aag-$A" test ! -e /tmp/aag-e2e-filter-ran || fail "Git clean filter ran during a read"
+req GET "/instances/$A/repos/changes?full_name=fixture%2Fapp&agent=claude" "$ADMIN"; expect 200 "another agent cannot see the Codex worktree"
+jq -e '.has_changes == false and .can_push == false' <<<"$BODY" >/dev/null || fail "other worktree: $BODY"
+docker exec -i "aag-$A" sh -eu <<'SH'
+cd "$HOME/work/worktrees/fixture/app/codex"
+git config --unset filter.fixture.clean
+git add .
+git commit -qm changes
+SH
+req GET "$CHANGES&include_diff=true" "$ADMIN"; expect 200 "unpublished commits enable send and remain visible in diff"
+jq -e '.has_changes == true and .can_push == true and (.diff | contains("+working"))' <<<"$BODY" >/dev/null || fail "unpublished commit: $BODY"
+docker exec "aag-$A" sh -eu -c 'cd "$HOME/work/worktrees/fixture/app/codex"; git push -q origin HEAD:refs/heads/arara/codex'
+req GET "$CHANGES" "$ADMIN"; expect 200 "published worktree has both actions disabled"
+jq -e '.has_changes == false and .can_push == false' <<<"$BODY" >/dev/null || fail "published worktree: $BODY"
+
 log "agents"
 req GET "/instances/$A/agents" "$ADMIN"; expect 200 "agent status"
 [ "$(jq -r '[.agents[].status] | unique | join(",")' <<<"$BODY")" = setup_required ] || fail "fresh agents should need setup: $BODY"

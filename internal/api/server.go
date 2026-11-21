@@ -150,6 +150,7 @@ func (s *Server) routes() {
 
 	s.handle("GET /api/instances", s.listInstances)
 	s.handle("POST /api/instances", s.createInstance)
+	s.handle("GET /api/instances/metrics", s.listMetrics)
 	s.handle("GET /api/instances/{id}", s.getInstance)
 	s.handle("PATCH /api/instances/{id}", s.updateInstance)
 	s.handle("DELETE /api/instances/{id}", s.deleteInstance)
@@ -179,9 +180,9 @@ func (s *Server) routes() {
 	s.handle("POST /api/instances/{id}/github/callback", s.githubCallback)
 	s.handle("GET /api/instances/{id}/github", s.githubStatus)
 	s.handle("GET /api/instances/{id}/github/repos", s.githubRepos)
-	s.handle("DELETE /api/instances/{id}/github", s.githubDisconnect)
 
 	s.handle("GET /api/instances/{id}/repos", s.listLocalRepos)
+	s.handle("GET /api/instances/{id}/repos/changes", s.repoChanges)
 	s.handle("POST /api/instances/{id}/repos", s.syncRepo)
 	s.handle("POST /api/instances/{id}/repos/{owner}/{name}/push", s.pushRepo)
 

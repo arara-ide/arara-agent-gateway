@@ -241,24 +241,40 @@ func TestRefreshExpiringToken(t *testing.T) {
 	}
 }
 
-func TestDisconnectRevokesAndForgets(t *testing.T) {
+func TestForgetRevokesAndForgets(t *testing.T) {
 	gh, f, env := setup(t)
 	id := makeInst(t, env, "one")
 	state := authorize(t, gh, f, id, "abc")
 	gh.Complete(context.Background(), id, "abc", state)
-	c, err := gh.Disconnect(context.Background(), id)
-	if err != nil || c.Status != store.ConnDisconnected {
-		t.Fatalf("disconnect %v", err)
-	}
+	gh.Forget(context.Background(), id)
 	if len(f.revoked) != 1 || f.revoked[0] != "gho_abc" {
 		t.Fatalf("revoked %v", f.revoked)
 	}
 	stored, _ := env.Store.GetConnection(context.Background(), id, github.Provider)
 	if stored.Secret != "" {
-		t.Fatal("secret kept after disconnect")
+		t.Fatal("secret kept after forget")
 	}
 	if _, err := gh.Token(context.Background(), id); !errors.Is(err, github.ErrNotConnected) {
 		t.Fatal("token still usable")
+	}
+}
+
+func TestInstanceDeleteRemovesConnection(t *testing.T) {
+	gh, f, env := setup(t)
+	id := makeInst(t, env, "one")
+	state := authorize(t, gh, f, id, "abc")
+	if _, err := gh.Complete(context.Background(), id, "abc", state); err != nil {
+		t.Fatal(err)
+	}
+	gh.Forget(context.Background(), id)
+	if err := env.Instances.Delete(context.Background(), id); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := env.Store.GetConnection(context.Background(), id, github.Provider); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("connection kept after instance delete: %v", err)
+	}
+	if len(f.revoked) != 1 {
+		t.Fatalf("revoked %v", f.revoked)
 	}
 }
 

@@ -433,7 +433,7 @@ func (s *Service) Repo(ctx context.Context, instanceID, fullName string) (Repo, 
 	return Repo{FullName: raw.FullName, Private: raw.Private, DefaultBranch: raw.DefaultBranch, CanPush: raw.Permissions.Push}, tok, nil
 }
 
-func (s *Service) Disconnect(ctx context.Context, instanceID string) (store.Connection, error) {
+func (s *Service) Forget(ctx context.Context, instanceID string) {
 	s.mu.Lock()
 	c, err := s.store.GetConnection(ctx, instanceID, Provider)
 	s.mu.Unlock()
@@ -446,7 +446,7 @@ func (s *Service) Disconnect(ctx context.Context, instanceID string) (store.Conn
 		}
 	}
 	next := store.Connection{InstanceID: instanceID, Provider: Provider, Status: store.ConnDisconnected, UpdatedAt: s.now().UTC()}
-	return next, s.store.UpsertConnection(ctx, next)
+	_ = s.store.UpsertConnection(ctx, next)
 }
 
 func (s *Service) revoke(ctx context.Context, accessToken string) {
