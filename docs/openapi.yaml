@@ -89,6 +89,30 @@ paths:
             application/json:
               schema: { $ref: "#/components/responses/InstanceResponse" }
         "400": { $ref: "#/components/responses/Error" }
+  /api/instances/metrics:
+    get:
+      tags: [instances]
+      summary: Resource usage of every instance (storage of the volume; CPU and memory only while running)
+      responses:
+        "200":
+          description: Metrics
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  instances:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id: { type: string }
+                        state: { type: string }
+                        storage_bytes: { type: [integer, "null"] }
+                        cpu_percent: { type: [number, "null"] }
+                        memory_bytes: { type: [integer, "null"] }
+                        memory_limit_bytes: { type: [integer, "null"] }
+        "401": { $ref: "#/components/responses/Error" }
   /api/instances/{id}:
     parameters: [{ $ref: "#/components/parameters/InstanceId" }]
     get:
@@ -508,19 +532,6 @@ paths:
                   connection: { $ref: "#/components/schemas/Connection" }
                   enabled: { type: boolean }
         "404": { $ref: "#/components/responses/Error" }
-    delete:
-      tags: [github]
-      summary: Revoke the grant at GitHub and forget the token
-      responses:
-        "200":
-          description: Disconnected
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  connection: { $ref: "#/components/schemas/Connection" }
-        "404": { $ref: "#/components/responses/Error" }
   /api/instances/{id}/github/repos:
     parameters:
       - { $ref: "#/components/parameters/InstanceId" }
@@ -586,6 +597,42 @@ paths:
                   repo: { $ref: "#/components/schemas/LocalRepo" }
                   selected: { type: boolean }
         "403": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+        "502": { $ref: "#/components/responses/Error" }
+  /api/instances/{id}/repos/changes:
+    parameters:
+      - { $ref: "#/components/parameters/InstanceId" }
+    get:
+      tags: [repos]
+      summary: Read local repository changes in the agent worktree
+      description: Uses local Git refs without fetching or starting the instance. A missing worktree is clean.
+      parameters:
+        - { name: full_name, in: query, required: true, schema: { type: string, example: octo/app } }
+        - { name: agent, in: query, required: true, schema: { $ref: "#/components/schemas/AgentName" } }
+        - { name: include_diff, in: query, schema: { type: boolean, default: false } }
+      responses:
+        "200":
+          description: Worktree status and optional diff
+          headers:
+            Cache-Control:
+              schema: { type: string, const: no-store }
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [has_changes, can_push]
+                properties:
+                  has_changes: { type: boolean, description: Local worktree changes or commits beyond the common base }
+                  can_push: { type: boolean, description: Local commits eligible to advance the last-known remote branch }
+                  diff: { type: string, description: Unified patch capped at 256 KiB of Git output }
+                  untracked:
+                    type: array
+                    maxItems: 200
+                    items: { type: string }
+                  truncated: { type: boolean, description: Some diff or untracked output was omitted }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
         "409": { $ref: "#/components/responses/Error" }
         "502": { $ref: "#/components/responses/Error" }
   /api/instances/{id}/repos/{owner}/{name}/push:

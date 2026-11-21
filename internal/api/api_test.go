@@ -163,6 +163,9 @@ func TestDeleteRequiresConfirmation(t *testing.T) {
 	if r := h.do(t, "DELETE", "/api/instances/"+id, adminKey, nil); r.status != 400 || errCode(r) != "confirmation_required" {
 		t.Fatalf("delete without confirm: %d", r.status)
 	}
+	if r := h.do(t, "DELETE", "/api/instances/"+id+"/github", adminKey, nil); r.status == 200 {
+		t.Fatalf("manual github disconnect still exposed: %d %s", r.status, r.raw)
+	}
 	if r := h.do(t, "DELETE", "/api/instances/"+id+"?confirm="+id, adminKey, nil); r.status != 204 {
 		t.Fatalf("delete: %d %s", r.status, r.raw)
 	}

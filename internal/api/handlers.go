@@ -154,6 +154,9 @@ func (s *Server) deleteInstance(w http.ResponseWriter, r *http.Request) error {
 	if r.URL.Query().Get("confirm") != in.ID {
 		return errConfirm
 	}
+	if s.GitHub != nil {
+		s.GitHub.Forget(r.Context(), in.ID)
+	}
 	if err := s.Instances.Delete(r.Context(), in.ID); err != nil {
 		return err
 	}
@@ -604,18 +607,5 @@ func (s *Server) githubRepos(w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"repos": repos, "page": page, "has_more": more})
-	return nil
-}
-
-func (s *Server) githubDisconnect(w http.ResponseWriter, r *http.Request) error {
-	in, err := s.instanceParam(r)
-	if err != nil {
-		return err
-	}
-	c, err := s.GitHub.Disconnect(r.Context(), in.ID)
-	if err != nil {
-		return err
-	}
-	writeJSON(w, http.StatusOK, map[string]any{"connection": connView(c)})
 	return nil
 }

@@ -47,6 +47,7 @@ async function gateway(method: string, path: string, body?: unknown) {
 
 - O gateway não impõe limite de 1 instância por usuário nem conhece usuários finais.
 - `POST /api/instances` com `{ "name": "opcional" }` (ou `{}`) sempre cria uma nova instância e devolve `201 Created` com `{ "instance": { "id": "inst_…", ... } }`.
+- `GET /api/instances/metrics` devolve, para cada instância, `storage_bytes` (tamanho do volume via `docker system df`), e `cpu_percent`, `memory_bytes` e `memory_limit_bytes` só quando ligada (senão `null`). Usado pelo painel admin do AC-WEB; a consulta é lenta (até 10 s) e não deve ser chamada em polling curto.
 - O `ac-services` salva o `instance.id` associado ao usuário no MongoDB e valida a propriedade em todas as rotas expostas ao cliente.
 
 Fluxo recomendado ao abrir o módulo de agentes:
@@ -133,13 +134,17 @@ Outras operações:
 | Listar repositórios acessíveis | `GET /api/instances/{id}/github/repos?page=1` |
 | Clonar ou atualizar na instância | `POST /api/instances/{id}/repos` `{ "full_name": "owner/name", "select": true }` |
 | Repositórios clonados | `GET /api/instances/{id}/repos` |
+| Alterações no worktree | `GET /api/instances/{id}/repos/changes?full_name=owner%2Fname&agent=codex&include_diff=true` |
 | Escolher o repositório padrão | `PATCH /api/instances/{id}` `{ "selected_repo": "owner/name" }` |
 | Enviar o trabalho de um agente | `POST /api/instances/{id}/repos/{owner}/{name}/push` `{ "agent": "codex" }` |
-| Desconectar (revoga no GitHub) | `DELETE /api/instances/{id}/github` |
 
 - Cada agente trabalha num worktree próprio, na branch `arara/<agente>`. O push só aceita branches `arara/*` e nunca envia para a branch padrão.
+- A consulta de alterações usa Git local, sem credenciais, fetch ou renovação de inatividade. Instância desligada retorna `409 instance_not_running`. A resposta usa `Cache-Control: no-store` e sempre inclui `has_changes` e `can_push`, ambos falsos se o worktree ainda não existe.
+- `has_changes` inclui alterações no worktree e commits após a base comum. A base compara o `HEAD` com a referência local de `origin/arara/<agente>` ou, antes do primeiro envio, com o `HEAD` do clone principal. `can_push` indica commits capazes de avançar essa referência local. O push continua validando permissões e estado atual no GitHub.
+- Com `include_diff=true`, a resposta pode incluir `diff` com até 256 KiB da saída do Git, `untracked` com até 200 caminhos de arquivos novos e `truncated` se parte da saída foi omitida. Os arquivos novos aparecem pelo caminho.
 - O token GitHub não fica no volume. O gateway o injeta como cabeçalho temporário em cada `clone`, `fetch` e `push`. Os agentes fazem commits locais e o push passa sempre pelo gateway.
 - `409 github_expired` indica que o usuário precisa reconectar.
+- Não há desconexão manual: a conexão só sai quando o token expira ou é revogado no GitHub (estado `expired`) ou quando a instância é apagada (`DELETE /api/instances/{id}`), que revoga o token no GitHub e remove a conexão.
 
 ## 7. Execução de prompts e streaming
 

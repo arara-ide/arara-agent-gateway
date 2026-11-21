@@ -37,6 +37,8 @@ type Engine struct {
 	Execs      []docker.ExecSpec
 	kills      map[string]chan struct{}
 	PingErr    error
+	stats      map[string]docker.Stats
+	sizes      map[string]int64
 }
 
 func New(images ...string) *Engine {
@@ -273,3 +275,41 @@ func ReadAll(r io.Reader) string {
 }
 
 func Lines(s string) []string { return strings.Split(strings.TrimSpace(s), "\n") }
+
+func (e *Engine) SetStats(name string, s docker.Stats) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.stats == nil {
+		e.stats = map[string]docker.Stats{}
+	}
+	e.stats[name] = s
+}
+
+func (e *Engine) SetVolumeSize(name string, size int64) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.sizes == nil {
+		e.sizes = map[string]int64{}
+	}
+	e.sizes[name] = size
+}
+
+func (e *Engine) ContainerStats(_ context.Context, id string) (docker.Stats, error) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	c, ok := e.Containers[id]
+	if !ok || !c.Running {
+		return docker.Stats{}, docker.ErrNotFound
+	}
+	return e.stats[id], nil
+}
+
+func (e *Engine) VolumeSizes(context.Context) (map[string]int64, error) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	out := map[string]int64{}
+	for name := range e.Volumes {
+		out[name] = e.sizes[name]
+	}
+	return out, nil
+}

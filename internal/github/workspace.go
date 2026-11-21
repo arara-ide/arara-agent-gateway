@@ -62,7 +62,11 @@ func authEnv(token string) []string {
 func (w *Workspace) git(ctx context.Context, in store.Instance, env []string, args ...string) (docker.Result, error) {
 	ctx, cancel := context.WithTimeout(ctx, gitTimeout)
 	defer cancel()
-	res, err := docker.Output(ctx, w.engine, docker.ExecSpec{Container: instance.ContainerName(in.ID), Cmd: append([]string{"git"}, args...), Env: append([]string{"GIT_TERMINAL_PROMPT=0"}, env...), WorkDir: instance.HomeDir}, nil, 1<<20)
+	return w.gitOutput(ctx, in, env, 1<<20, args...)
+}
+
+func (w *Workspace) gitOutput(ctx context.Context, in store.Instance, env []string, limit int64, args ...string) (docker.Result, error) {
+	res, err := docker.Output(ctx, w.engine, docker.ExecSpec{Container: instance.ContainerName(in.ID), Cmd: append([]string{"git"}, args...), Env: append([]string{"GIT_TERMINAL_PROMPT=0"}, env...), WorkDir: instance.HomeDir}, nil, limit)
 	if err != nil {
 		return res, err
 	}
