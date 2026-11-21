@@ -73,7 +73,7 @@ expect() {
   ok "$2"
 }
 
-docker image inspect "$IMAGE" >/dev/null 2>&1 || fail "runtime image $IMAGE not found (docker compose build runtime)"
+docker image inspect "$IMAGE" >/dev/null 2>&1 || fail "runtime image $IMAGE not found (scripts/build-runtime.sh)"
 log "build gateway"
 (cd "$ROOT" && go build -o "$WORK/gateway" ./cmd/gateway)
 start_gateway

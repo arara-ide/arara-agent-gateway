@@ -24,7 +24,7 @@ jobs:
       - run: go vet ./...
       - run: go test -race -count=1 ./...
       - run: CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o dist/arara-agent-gateway ./cmd/gateway
-      - run: sh -n runtime/bin/aag-run && sh -n runtime/bin/aag-kill && sh -n runtime/bin/aag-prune && bash -n scripts/e2e-docker.sh
+      - run: sh -n runtime/bin/aag-run && sh -n runtime/bin/aag-kill && sh -n runtime/bin/aag-prune && bash -n scripts/e2e-docker.sh && bash -n scripts/build-runtime.sh
   docker:
     runs-on: ubuntu-latest
     timeout-minutes: 30
