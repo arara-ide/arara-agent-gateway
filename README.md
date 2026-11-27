@@ -96,7 +96,7 @@ scripts/build-runtime.sh
 docker compose -f docker-compose.yml -f docker-compose.proxy.yml up -d --build
 ```
 
-O `scripts/build-runtime.sh` constrói a imagem de runtime (`RUNTIME_IMAGE` do `.env`, padrão `arara-agent-runtime:local`, cerca de 2 GB) com as versões mais recentes de Claude Code, Codex e Antigravity. Rode-o antes de cada deploy (no Komodo, no `pre_deploy`). Se o build falhar, ele mantém a imagem atual. Instâncias ligadas passam a usar a imagem nova quando são desligadas e ligadas de novo.
+O `scripts/build-runtime.sh` constrói a imagem de runtime (`RUNTIME_IMAGE` do `.env`, padrão `arara-agent-runtime:local`, cerca de 2 GB) com as versões mais recentes de Claude Code, Codex e Antigravity. Rode-o antes de cada deploy (no Komodo, no `pre_deploy`). Se o build falhar, ele mantém a imagem atual. Ele também recria o container parado `<imagem>-anchor`, que impede o prune diário de imagens ociosas (como o `auto_prune` do Komodo) de apagar a imagem de runtime; não remova esse container. Instâncias ligadas passam a usar a imagem nova quando são desligadas e ligadas de novo.
 
 O Compose:
 - sobe o gateway como usuário sem privilégio, com rootfs somente leitura;
