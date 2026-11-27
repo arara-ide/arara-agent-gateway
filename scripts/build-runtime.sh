@@ -38,8 +38,15 @@ build() {
   docker build --pull -f "$DOCKERFILE" -t "$IMAGE" "$@" "$ROOT"
 }
 
+anchor_image() {
+  docker rm -f "$ANCHOR" >/dev/null 2>&1 || true
+  docker create --name "$ANCHOR" --label aag.role=runtime-anchor --network none --entrypoint true "$IMAGE" >/dev/null
+  log "runtime image anchored by stopped container $ANCHOR"
+}
+
 IMAGE="${RUNTIME_IMAGE:-$(env_value RUNTIME_IMAGE)}"
 IMAGE="${IMAGE:-arara-agent-runtime:local}"
+ANCHOR="$(printf '%s' "$IMAGE" | tr -c 'A-Za-z0-9_.-' '-')-anchor"
 NODE_IMAGE="$(sed -n 's/^ARG NODE_IMAGE=//p' "$DOCKERFILE")"
 PREVIOUS="$(docker image inspect --format '{{.Id}}' "$IMAGE" 2>/dev/null || true)"
 
@@ -59,6 +66,7 @@ log "building $IMAGE with the latest CLIs"
 if ! build ${args[@]+"${args[@]}"}; then
   if [ -n "$PREVIOUS" ]; then
     log "build with the latest CLIs failed, keeping the current $IMAGE"
+    anchor_image
     exit 0
   fi
   log "build with the latest CLIs failed, building with the Dockerfile defaults"
@@ -67,6 +75,7 @@ fi
 
 CURRENT="$(docker image inspect --format '{{.Id}}' "$IMAGE")"
 docker run --rm --entrypoint sh "$IMAGE" -c 'claude --version && codex --version && agy --version' >&2
+anchor_image
 if [ -n "$PREVIOUS" ] && [ "$PREVIOUS" != "$CURRENT" ]; then
   docker image rm "$PREVIOUS" >/dev/null 2>&1 && log "removed previous runtime image" || log "previous runtime image still in use, kept"
 fi
